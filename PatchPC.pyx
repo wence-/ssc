@@ -1,8 +1,7 @@
 import numpy
 cimport numpy
 cimport petsc4py.PETSc as PETSc
-from cython cimport view
-numpy.import_array()
+from libc.stdint cimport uintptr_t
 
 cdef extern from "petsc.h" nogil:
     ctypedef long PetscInt
@@ -61,14 +60,14 @@ cdef int PCPatch_ComputeOperator(
     cdef PETSc.Mat Mat = PETSc.Mat()
     cdef PETSc.PC Pc = PETSc.PC()
     Pc.pc = pc
-    CHKERR( PetscObjectReference(<void*>pc) )
     Mat.mat = mat
     CHKERR( PetscObjectReference(<void*>mat) )
+    CHKERR( PetscObjectReference(<void*>pc) )
     cdef object context = Pc.get_attr("__compute_operator__")
     if context is None and ctx != NULL: context = <object>ctx
     assert context is not None and type(context) is tuple
     (op, args, kargs) = context
-    op(Pc, Mat, numpy.asarray(<PetscInt[:ncell]>cells), numpy.asarray(<PetscInt[:ndof]>dofmap), *args, **kargs)
+    op(Pc, Mat, ncell, <uintptr_t>cells, <uintptr_t>dofmap, *args, **kargs)
 
 
 cdef class PC(petsc4py.PETSc.PC):

@@ -19,6 +19,7 @@ typedef struct {
     PetscSection    bcCounts;
     IS              cells;
     IS              dofs;
+    IS              bcNodes;
     IS             *bcs;
 
     MPI_Datatype    data_type;
@@ -26,11 +27,9 @@ typedef struct {
 
     PetscBool       save_operators; /* Save all operators (or create/destroy one at a time?) */
     PetscInt        npatch;     /* Number of patches */
-    PetscInt        numBcs;     /* Number of BC nodes */
     PetscInt        bs;            /* block size (can come from global
                                     * operators?) */
     PetscInt        nodesPerCell;
-    const PetscInt *bcNodes;    /* BC nodes */
     const PetscInt *cellNodeMap; /* Map from cells to nodes */
 
     KSP            *ksp;        /* Solvers for each patch */
@@ -112,8 +111,7 @@ PETSC_EXTERN PetscErrorCode PCPatchSetDiscretisationInfo(PC pc, PetscSection dof
     patch->nodesPerCell = nodesPerCell;
     /* Not freed here. */
     patch->cellNodeMap = cellNodeMap;
-    patch->numBcs = numBcs;
-    patch->bcNodes = bcNodes;
+    ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, bcNodes, PETSC_USE_POINTER, &patch->bcNodes); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -508,6 +506,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
     ierr = ISGeneralSetIndices(cells, numCells, (const PetscInt *)newCellsArray, PETSC_OWN_POINTER); CHKERRQ(ierr);
     ierr = ISCreateGeneral(PETSC_COMM_SELF, numGlobalDofs, globalDofsArray, PETSC_OWN_POINTER, gtol); CHKERRQ(ierr);
     ierr = ISCreateGeneral(PETSC_COMM_SELF, numDofs, dofsArray, PETSC_OWN_POINTER, &patch->dofs); CHKERRQ(ierr);
+    ierr = ISView(patch->dofs, NULL); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -522,16 +521,14 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
     PetscErrorCode  ierr;
     PC_PATCH       *patch      = (PC_PATCH *)pc->data;
     DM              dm         = patch->dm;
-    PetscInt        numBcs     = patch->numBcs;
-    const PetscInt *bcNodes    = patch->bcNodes;
+    PetscInt        numBcs;
+    const PetscInt *bcNodes    = NULL;
     PetscSection    dofSection = patch->dofSection;
     PetscSection    bcCounts;
     PetscHashI      globalBcs;
     PetscHashI      localBcs;
     PetscHashI      patchDofs;
     PetscInt       *bcsArray   = NULL;
-    PetscInt        totalNumBcs;
-    PetscInt        bcIndex    = 0;
     PetscInt        vStart, vEnd;
     PetscInt        closureSize;
     PetscInt       *closure    = NULL;
@@ -540,10 +537,12 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
     PetscFunctionBegin;
 
     PetscHashICreate(globalBcs);
+    ierr = ISGetIndices(patch->bcNodes, &bcNodes); CHKERRQ(ierr);
+    ierr = ISGetSize(patch->bcNodes, &numBcs); CHKERRQ(ierr);
     for ( PetscInt i = 0; i < numBcs; i++ ) {
         PetscHashIAdd(globalBcs, bcNodes[i], 0);
     }
-
+    ierr = ISRestoreIndices(patch->bcNodes, &bcNodes); CHKERRQ(ierr);
     PetscHashICreate(patchDofs);
     PetscHashICreate(localBcs);
 
@@ -551,14 +550,13 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
     ierr = PetscSectionCreate(PETSC_COMM_SELF, &patch->bcCounts); CHKERRQ(ierr);
     bcCounts = patch->bcCounts;
     ierr = PetscSectionSetChart(bcCounts, vStart, vEnd); CHKERRQ(ierr);
-    /* Guess at number of bcs */
-    ierr = PetscSectionGetStorageSize(facetCounts, &totalNumBcs); CHKERRQ(ierr);
-    ierr = PetscMalloc1(totalNumBcs, &bcsArray); CHKERRQ(ierr);
+    ierr = PetscMalloc1(vEnd - vStart, &patch->bcs); CHKERRQ(ierr);
 
     ierr = ISGetIndices(gtol, &gtolArray); CHKERRQ(ierr);
     ierr = ISGetIndices(facets, &facetsArray); CHKERRQ(ierr);
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
         PetscInt numBcs, dof, off;
+        PetscInt bcIndex = 0;
         PetscHashIClear(patchDofs);
         PetscHashIClear(localBcs);
         ierr = PetscSectionGetDof(gtolCounts, v, &dof); CHKERRQ(ierr);
@@ -580,8 +578,9 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
             ierr = DMPlexGetTransitiveClosure(dm, f, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
             for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
                 PetscInt ldof, loff;
-                ierr = PetscSectionGetDof(dofSection, f, &ldof); CHKERRQ(ierr);
-                ierr = PetscSectionGetOffset(dofSection, f, &loff); CHKERRQ(ierr);
+                const PetscInt p = closure[2*ci];
+                ierr = PetscSectionGetDof(dofSection, p, &ldof); CHKERRQ(ierr);
+                ierr = PetscSectionGetOffset(dofSection, p, &loff); CHKERRQ(ierr);
                 if ( ldof > 0 ) {
                     for ( PetscInt j = loff; j < ldof + loff; j++ ) {
                         PetscInt localDof;
@@ -595,16 +594,14 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
                 }
             }
         }
-        PetscHashISize(localBcs, numBcs);
-        ierr = PetscSectionSetDof(bcCounts, v, numBcs); CHKERRQ(ierr);
         /* OK, now we have a hash table with all the bcs indicated by
          * the facets and global bcs */
-        if ( numBcs + bcIndex >= totalNumBcs ) {
-            totalNumBcs = (PetscInt)((1 + numBcs + bcIndex)*2);
-            ierr = PetscRealloc(sizeof(PetscInt)*totalNumBcs, &bcsArray); CHKERRQ(ierr);
-        }
+        PetscHashISize(localBcs, numBcs);
+        ierr = PetscSectionSetDof(bcCounts, v, numBcs); CHKERRQ(ierr);
+        ierr = PetscMalloc1(numBcs, &bcsArray); CHKERRQ(ierr);
         ierr = PetscHashIGetKeys(localBcs, &bcIndex, bcsArray); CHKERRQ(ierr);
-        ierr = PetscSortInt(numBcs, bcsArray + bcIndex - numBcs); CHKERRQ(ierr);
+        ierr = PetscSortInt(numBcs, bcsArray); CHKERRQ(ierr);
+        ierr = ISCreateBlock(PETSC_COMM_SELF, patch->bs, numBcs, bcsArray, PETSC_OWN_POINTER, &(patch->bcs[v - vStart])); CHKERRQ(ierr);
     }
     ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
     ierr = ISRestoreIndices(gtol, &gtolArray); CHKERRQ(ierr);
@@ -614,14 +611,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
     PetscHashIDestroy(globalBcs);
 
     ierr = PetscSectionSetUp(bcCounts); CHKERRQ(ierr);
-    ierr = PetscMalloc1(vEnd - vStart, &patch->bcs); CHKERRQ(ierr);
-    for ( PetscInt i = vStart; i < vEnd; i++ ) {
-        PetscInt dof, off;
-        ierr = PetscSectionGetDof(bcCounts, i, &dof);
-        ierr = PetscSectionGetOffset(bcCounts, i, &off); CHKERRQ(ierr);
-        ierr = ISCreateBlock(PETSC_COMM_SELF, patch->bs, dof, bcsArray + off, PETSC_COPY_VALUES, &(patch->bcs[i - vStart])); CHKERRQ(ierr);
-    }
-    ierr = PetscFree(bcsArray); CHKERRQ(ierr);
 
     PetscFunctionReturn(0);
 }
@@ -675,6 +664,7 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     ierr = PetscSectionDestroy(&patch->bcCounts); CHKERRQ(ierr);
     ierr = ISDestroy(&patch->cells); CHKERRQ(ierr);
     ierr = ISDestroy(&patch->dofs); CHKERRQ(ierr);
+    ierr = ISDestroy(&patch->bcNodes); CHKERRQ(ierr);
     if (patch->bcs) {
         for ( i = 0; i < patch->npatch; i++ ) {
             ierr = ISDestroy(&patch->bcs[i]); CHKERRQ(ierr);
@@ -716,8 +706,6 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     ierr = PetscFree(patch->sub_mat_type); CHKERRQ(ierr);
 
     patch->free_type = PETSC_FALSE;
-    patch->numBcs = 0;
-    patch->bcNodes = NULL;
     patch->bs = 0;
     patch->cellNodeMap = NULL;
     PetscFunctionReturn(0);
@@ -805,7 +793,6 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, PetscInt which)
     ierr = ISRestoreIndices(patch->cells, &cellsArray); CHKERRQ(ierr);
     /* Apply boundary conditions.  Could also do this through the local_to_patch guy. */
     ierr = MatZeroRowsColumnsIS(mat, patch->bcs[which-pStart], (PetscScalar)1.0, NULL, NULL); CHKERRQ(ierr);
-    ierr = MatView(mat, NULL); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -888,6 +875,11 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
             ierr = KSPSetOperators(patch->ksp[i], patch->mat[i], NULL); CHKERRQ(ierr);
         }
     }
+    if (!pc->setupcalled) {
+        for ( PetscInt i = 0; i < patch->npatch; i++ ) {
+            ierr = KSPSetFromOptions(patch->ksp[i]); CHKERRQ(ierr);
+        }
+    }
     PetscFunctionReturn(0);
 }
 
@@ -902,7 +894,8 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     PetscScalar       *localY  = NULL;
     PetscScalar       *globalY = NULL;
     PetscScalar       *patchX  = NULL;
-    PetscInt           pStart;
+    const PetscInt    *bcNodes = NULL;
+    PetscInt           pStart, numBcs;
     
     PetscFunctionBegin;
 
@@ -911,6 +904,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     /* Scatter from global space into overlapped local spaces */
     ierr = PetscSFBcastBegin(patch->globalToLocal, patch->data_type, globalX, localX); CHKERRQ(ierr);
     ierr = PetscSFBcastEnd(patch->globalToLocal, patch->data_type, globalX, localX); CHKERRQ(ierr);
+    ierr = PetscSFView(patch->globalToLocal, NULL); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecRestoreArray(patch->localX, &localX); CHKERRQ(ierr);
     ierr = PetscSectionGetChart(patch->localToPatch, &pStart, NULL); CHKERRQ(ierr);
@@ -935,17 +929,14 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
             ierr = PCPatchCreateMatrix(pc, patch->patchX[i], patch->patchY[i], &mat); CHKERRQ(ierr);
             /* Populate operator here. */
             ierr = PCPatchComputeOperator(pc, mat, i); CHKERRQ(ierr);
-            ierr = KSPSetOperators(patch->ksp[i], mat, NULL);
+            ierr = KSPSetOperators(patch->ksp[i], mat, mat);
             /* Drop reference so the KSPSetOperators below will blow it away. */
             ierr = MatDestroy(&mat); CHKERRQ(ierr);
         }
-        
-        // ierr = KSPSolve(patch->ksp[i], patch->patchX[i], patch->patchY[i]); CHKERRQ(ierr);
-
+        ierr = KSPSolve(patch->ksp[i], patch->patchX[i], patch->patchY[i]); CHKERRQ(ierr);
         if (!patch->save_operators) {
             ierr = KSPSetOperators(patch->ksp[i], NULL, NULL); CHKERRQ(ierr);
         }
-        ierr = VecCopy(patch->patchX[i], patch->patchY[i]); CHKERRQ(ierr);
         ierr = VecResetArray(patch->patchX[i]); CHKERRQ(ierr);
         ierr = VecResetArray(patch->patchY[i]); CHKERRQ(ierr);
     }
@@ -961,13 +952,20 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = PetscSFReduceBegin(patch->globalToLocal, patch->data_type, localY, globalY, MPI_SUM); CHKERRQ(ierr);
     ierr = PetscSFReduceEnd(patch->globalToLocal, patch->data_type, localY, globalY, MPI_SUM); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(patch->localY, (const PetscScalar **)&localY); CHKERRQ(ierr);
-    ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
 
     /* Now we need to send the global BC values through */
-    /* 
-     * ierr = VecScatterBegin(globalBcScatter, x, y, INSERT_VALUES, SCATTER_FORWARD); CHKERRQ(ierr);
-     * ierr = VecScatterEnd(globalBcScatter, x, y, INSERT_VALUES, SCATTER_FORWARD); CHKERRQ(ierr);
-     */
+    ierr = VecGetArrayRead(x, &globalX); CHKERRQ(ierr);
+    ierr = ISGetSize(patch->bcNodes, &numBcs); CHKERRQ(ierr);
+    ierr = ISGetIndices(patch->bcNodes, &bcNodes); CHKERRQ(ierr);
+    for ( PetscInt i = 0; i < numBcs; i++ ) {
+        for ( PetscInt j = 0; j < patch->bs; j++ ) {
+            const PetscInt idx = patch->bs * bcNodes[i] + j;
+            globalY[idx] = globalX[idx];
+        }
+    }
+    ierr = ISRestoreIndices(patch->bcNodes, &bcNodes); CHKERRQ(ierr);
+    ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
+    ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
