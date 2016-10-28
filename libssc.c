@@ -619,9 +619,7 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
         PetscInt dof, off;
         ierr = PetscSectionGetDof(bcCounts, i, &dof);
         ierr = PetscSectionGetOffset(bcCounts, i, &off); CHKERRQ(ierr);
-        if (dof > 0) {
-            ierr = ISCreateBlock(PETSC_COMM_SELF, 1, dof, bcsArray + off, PETSC_COPY_VALUES, &(patch->bcs[i - vStart])); CHKERRQ(ierr);
-        }
+        ierr = ISCreateBlock(PETSC_COMM_SELF, patch->bs, dof, bcsArray + off, PETSC_COPY_VALUES, &(patch->bcs[i - vStart])); CHKERRQ(ierr);
     }
     ierr = PetscFree(bcsArray); CHKERRQ(ierr);
 
@@ -861,12 +859,10 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
         for ( PetscInt i = pStart; i < pEnd; i++ ) {
             PetscInt dof;
             ierr = PetscSectionGetDof(gtolCounts, i, &dof); CHKERRQ(ierr);
-            if ( dof > 0 ) {
-                ierr = VecCreateSeqWithArray(PETSC_COMM_SELF, patch->bs,
-                                             dof*patch->bs, NULL, &patch->patchX[i - pStart]); CHKERRQ(ierr);
-                ierr = VecCreateSeqWithArray(PETSC_COMM_SELF, patch->bs,
-                                             dof*patch->bs, NULL, &patch->patchY[i - pStart]); CHKERRQ(ierr);
-            }
+            ierr = VecCreateSeqWithArray(PETSC_COMM_SELF, patch->bs,
+                                         dof*patch->bs, NULL, &patch->patchX[i - pStart]); CHKERRQ(ierr);
+            ierr = VecCreateSeqWithArray(PETSC_COMM_SELF, patch->bs,
+                                         dof*patch->bs, NULL, &patch->patchY[i - pStart]); CHKERRQ(ierr);
         }
         ierr = PetscMalloc1(patch->npatch, &patch->ksp); CHKERRQ(ierr);
         ierr = PCGetOptionsPrefix(pc, &prefix); CHKERRQ(ierr);
