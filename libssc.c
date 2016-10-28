@@ -19,7 +19,7 @@ typedef struct {
     PetscSection    bcCounts;
     IS              cells;
     IS              dofs;
-    IS              bcs;
+    IS             *bcs;
 
     MPI_Datatype    data_type;
     PetscBool       free_type;
@@ -156,11 +156,11 @@ PETSC_EXTERN PetscErrorCode PCPatchSetComputeOperator(PC pc, PetscErrorCode (*fu
  * + cellCounts - Section with counts of cells around each vertex
  * - cells - IS of the cell point indices of cells in each patch
  */
-static PetscErrorCode PCPatchCreateCellPatches(DM dm,
-                                               PetscSection *cellCounts,
-                                               IS *cells)
+static PetscErrorCode PCPatchCreateCellPatches(PC pc)
 {
     PetscErrorCode  ierr;
+    PC_PATCH       *patch      = (PC_PATCH *)pc->data;
+    DM              dm;
     DMLabel         core, non_core;
     PetscInt        pStart, pEnd, vStart, vEnd, cStart, cEnd;
     PetscBool       flg1, flg2;
@@ -168,9 +168,14 @@ static PetscErrorCode PCPatchCreateCellPatches(DM dm,
     PetscInt       *closure    = NULL;
     PetscInt       *cellsArray = NULL;
     PetscInt        numCells;
+    PetscSection    cellCounts;
 
     PetscFunctionBegin;
 
+    dm = patch->dm;
+    if (!dm) {
+        SETERRQ(PetscObjectComm((PetscObject)pc), PETSC_ERR_ARG_WRONGSTATE, "DM not yet set on patch PC\n");
+    }
     ierr = DMPlexGetChart(dm, &pStart, &pEnd); CHKERRQ(ierr);
     ierr = DMPlexGetDepthStratum(dm, 0, &vStart, &vEnd); CHKERRQ(ierr);
     ierr = DMPlexGetHeightStratum(dm, 0, &cStart, &cEnd); CHKERRQ(ierr);
@@ -183,8 +188,9 @@ static PetscErrorCode PCPatchCreateCellPatches(DM dm,
     ierr = DMLabelCreateIndex(core, pStart, pEnd); CHKERRQ(ierr);
     ierr = DMLabelCreateIndex(non_core, pStart, pEnd); CHKERRQ(ierr);
 
-    ierr = PetscSectionCreate(PETSC_COMM_SELF, cellCounts); CHKERRQ(ierr);
-    ierr = PetscSectionSetChart(*cellCounts, vStart, vEnd); CHKERRQ(ierr);
+    ierr = PetscSectionCreate(PETSC_COMM_SELF, &patch->cellCounts); CHKERRQ(ierr);
+    cellCounts = patch->cellCounts;
+    ierr = PetscSectionSetChart(cellCounts, vStart, vEnd); CHKERRQ(ierr);
 
     /* Count cells surrounding each vertex */
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
@@ -198,23 +204,23 @@ static PetscErrorCode PCPatchCreateCellPatches(DM dm,
         for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
             const PetscInt c = closure[2*ci];
             if (cStart <= c && c < cEnd) {
-                ierr = PetscSectionAddDof(*cellCounts, v, 1); CHKERRQ(ierr);
+                ierr = PetscSectionAddDof(cellCounts, v, 1); CHKERRQ(ierr);
             }
         }
     }
     ierr = DMLabelDestroyIndex(core); CHKERRQ(ierr);
     ierr = DMLabelDestroyIndex(non_core); CHKERRQ(ierr);
 
-    ierr = PetscSectionSetUp(*cellCounts); CHKERRQ(ierr);
-    ierr = PetscSectionGetStorageSize(*cellCounts, &numCells); CHKERRQ(ierr);
+    ierr = PetscSectionSetUp(cellCounts); CHKERRQ(ierr);
+    ierr = PetscSectionGetStorageSize(cellCounts, &numCells); CHKERRQ(ierr);
     ierr = PetscMalloc1(numCells, &cellsArray); CHKERRQ(ierr);
 
     /* Now that we know how much space we need, run through again and
      * actually remember the cells. */
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
         PetscInt ndof, off;
-        ierr = PetscSectionGetDof(*cellCounts, v, &ndof); CHKERRQ(ierr);
-        ierr = PetscSectionGetOffset(*cellCounts, v, &off); CHKERRQ(ierr);
+        ierr = PetscSectionGetDof(cellCounts, v, &ndof); CHKERRQ(ierr);
+        ierr = PetscSectionGetOffset(cellCounts, v, &off); CHKERRQ(ierr);
         if ( ndof <= 0 ) {
             continue;
         }
@@ -230,8 +236,9 @@ static PetscErrorCode PCPatchCreateCellPatches(DM dm,
     }
     ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, &closureSize, &closure); CHKERRQ(ierr);
 
-    ierr = ISCreateGeneral(PETSC_COMM_SELF, numCells, cellsArray, PETSC_OWN_POINTER, cells); CHKERRQ(ierr);
-
+    ierr = ISCreateGeneral(PETSC_COMM_SELF, numCells, cellsArray, PETSC_OWN_POINTER, &patch->cells); CHKERRQ(ierr);
+    ierr = PetscSectionGetChart(patch->cellCounts, &pStart, &pEnd); CHKERRQ(ierr);
+    patch->npatch = pEnd - pStart;
     PetscFunctionReturn(0);
 }
 
@@ -253,13 +260,13 @@ static PetscErrorCode PCPatchCreateCellPatches(DM dm,
  *  The output facets do not include those facets that are the
  *  boundary of the domain, they are treated separately.
  */
-static PetscErrorCode PCPatchCreateCellPatchFacets(DM dm,
-                                                   PetscSection cellCounts,
-                                                   IS cells,
-                                                   PetscSection *facetCounts,
-                                                   IS *facets)
+static PetscErrorCode PCPatchCreateCellPatchFacets(PC pc, PetscSection *facetCounts, IS *facets)
 {
     PetscErrorCode  ierr;
+    PC_PATCH       *patch       = (PC_PATCH *)pc->data;
+    DM              dm          = patch->dm;
+    PetscSection    cellCounts  = patch->cellCounts;
+    IS              cells       = patch->cells;
     PetscInt        vStart, vEnd, fStart, fEnd;
     DMLabel         facetLabel;
     PetscBool       flg;
@@ -386,25 +393,25 @@ static PetscErrorCode PCPatchCreateCellPatchFacets(DM dm,
  * . gtolCounts - Section with counts of dofs per cell patch
  * - gtol - IS mapping from global dofs to local dofs for each patch. 
  */
-static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(DM dm,
-                                                               PetscSection cellCounts,
-                                                               IS cells,
+static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
                                                                PetscSection facetCounts,
                                                                IS facets,
-                                                               PetscSection cellNumbering,
-                                                               const PetscInt dofsPerCell,
-                                                               const PetscInt *cellNodeMap,
-                                                               IS *dofs,
                                                                PetscSection *gtolCounts,
                                                                IS *gtol)
 {
     PetscErrorCode  ierr;
+    PC_PATCH       *patch           = (PC_PATCH *)pc->data;
+    PetscSection    cellCounts      = patch->cellCounts;
+    IS              cells           = patch->cells;
+    PetscSection    cellNumbering   = patch->cellNumbering;
+    const PetscInt  dofsPerCell     = patch->nodesPerCell;
+    const PetscInt *cellNodeMap     = patch->cellNodeMap;
     PetscInt        numCells;
     PetscInt        numDofs;
     PetscInt        numGlobalDofs;
     PetscInt        vStart, vEnd;
     const PetscInt *cellsArray;
-    PetscInt       *newCellsArray = NULL;
+    PetscInt       *newCellsArray   = NULL;
     PetscInt       *dofsArray       = NULL;
     PetscInt       *globalDofsArray = NULL;
     PetscInt        globalIndex     = 0;
@@ -500,33 +507,34 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(DM dm,
     /* Replace cell indices with firedrake-numbered ones. */
     ierr = ISGeneralSetIndices(cells, numCells, (const PetscInt *)newCellsArray, PETSC_OWN_POINTER); CHKERRQ(ierr);
     ierr = ISCreateGeneral(PETSC_COMM_SELF, numGlobalDofs, globalDofsArray, PETSC_OWN_POINTER, gtol); CHKERRQ(ierr);
-    ierr = ISCreateGeneral(PETSC_COMM_SELF, numDofs, dofsArray, PETSC_OWN_POINTER, dofs); CHKERRQ(ierr);
+    ierr = ISCreateGeneral(PETSC_COMM_SELF, numDofs, dofsArray, PETSC_OWN_POINTER, &patch->dofs); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
 #undef __FUNCT__
 #define __FUNCT__ "PCPatchCreateCellPatchBCs"
-static PetscErrorCode PCPatchCreateCellPatchBCs(DM dm,
-                                                PetscInt numBcs,
-                                                const PetscInt *bcNodes,
+static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
                                                 PetscSection facetCounts,
                                                 IS facets,
                                                 PetscSection gtolCounts,
-                                                IS gtol,
-                                                PetscSection dofSection,
-                                                PetscSection *bcCounts,
-                                                IS *bcs)
+                                                IS gtol)
 {
     PetscErrorCode  ierr;
+    PC_PATCH       *patch      = (PC_PATCH *)pc->data;
+    DM              dm         = patch->dm;
+    PetscInt        numBcs     = patch->numBcs;
+    const PetscInt *bcNodes    = patch->bcNodes;
+    PetscSection    dofSection = patch->dofSection;
+    PetscSection    bcCounts;
     PetscHashI      globalBcs;
     PetscHashI      localBcs;
     PetscHashI      patchDofs;
-    PetscInt       *bcsArray = NULL;
+    PetscInt       *bcsArray   = NULL;
     PetscInt        totalNumBcs;
-    PetscInt        bcIndex  = 0;
+    PetscInt        bcIndex    = 0;
     PetscInt        vStart, vEnd;
     PetscInt        closureSize;
-    PetscInt       *closure  = NULL;
+    PetscInt       *closure    = NULL;
     const PetscInt *gtolArray;
     const PetscInt *facetsArray;
     PetscFunctionBegin;
@@ -540,8 +548,9 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(DM dm,
     PetscHashICreate(localBcs);
 
     ierr = PetscSectionGetChart(facetCounts, &vStart, &vEnd); CHKERRQ(ierr);
-    ierr = PetscSectionCreate(PETSC_COMM_SELF, bcCounts); CHKERRQ(ierr);
-    ierr = PetscSectionSetChart(*bcCounts, vStart, vEnd); CHKERRQ(ierr);
+    ierr = PetscSectionCreate(PETSC_COMM_SELF, &patch->bcCounts); CHKERRQ(ierr);
+    bcCounts = patch->bcCounts;
+    ierr = PetscSectionSetChart(bcCounts, vStart, vEnd); CHKERRQ(ierr);
     /* Guess at number of bcs */
     ierr = PetscSectionGetStorageSize(facetCounts, &totalNumBcs); CHKERRQ(ierr);
     ierr = PetscMalloc1(totalNumBcs, &bcsArray); CHKERRQ(ierr);
@@ -587,7 +596,7 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(DM dm,
             }
         }
         PetscHashISize(localBcs, numBcs);
-        ierr = PetscSectionSetDof(*bcCounts, v, numBcs); CHKERRQ(ierr);
+        ierr = PetscSectionSetDof(bcCounts, v, numBcs); CHKERRQ(ierr);
         /* OK, now we have a hash table with all the bcs indicated by
          * the facets and global bcs */
         if ( numBcs + bcIndex >= totalNumBcs ) {
@@ -604,29 +613,36 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(DM dm,
     PetscHashIDestroy(patchDofs);
     PetscHashIDestroy(globalBcs);
 
-    ierr = PetscSectionSetUp(*bcCounts); CHKERRQ(ierr);
-    ierr = PetscRealloc(sizeof(PetscInt)*bcIndex, &bcsArray); CHKERRQ(ierr);
-    ierr = ISCreateGeneral(PETSC_COMM_SELF, bcIndex, bcsArray, PETSC_OWN_POINTER, bcs); CHKERRQ(ierr);
+    ierr = PetscSectionSetUp(bcCounts); CHKERRQ(ierr);
+    ierr = PetscMalloc1(vEnd - vStart, &patch->bcs); CHKERRQ(ierr);
+    for ( PetscInt i = vStart; i < vEnd; i++ ) {
+        PetscInt dof, off;
+        ierr = PetscSectionGetDof(bcCounts, i, &dof);
+        ierr = PetscSectionGetOffset(bcCounts, i, &off); CHKERRQ(ierr);
+        if (dof > 0) {
+            ierr = ISCreateBlock(PETSC_COMM_SELF, 1, dof, bcsArray + off, PETSC_COPY_VALUES, &(patch->bcs[i - vStart])); CHKERRQ(ierr);
+        }
+    }
+    ierr = PetscFree(bcsArray); CHKERRQ(ierr);
 
     PetscFunctionReturn(0);
 }
 
-static PetscErrorCode PCPatchCreateGlobalToLocalSF(PetscSF gtolSF,
-                                                   PetscSection gtolCounts,
-                                                   IS gtol,
-                                                   PetscSF *sf)
+static PetscErrorCode PCPatchCreateGlobalToLocalSF(PC pc,
+                                                   IS gtol)
 {
     PetscErrorCode  ierr;
-    PetscSF         localSF;
+    PC_PATCH *patch = (PC_PATCH *)pc->data;
+    PetscSF localSF;
     PetscSFNode    *iremote;
     const PetscInt *gtolArray;
     PetscInt        nroots, nleaves;
     PetscFunctionBegin;
 
-    ierr = PetscSFCreate(PetscObjectComm((PetscObject)gtolCounts), &localSF); CHKERRQ(ierr);
-    ierr = PetscSFGetGraph(gtolSF, NULL, &nroots, NULL, NULL); CHKERRQ(ierr);
-    ierr = PetscSectionGetStorageSize(gtolCounts, &nleaves); CHKERRQ(ierr);
+    ierr = PetscSFCreate(PetscObjectComm((PetscObject)gtol), &localSF); CHKERRQ(ierr);
+    ierr = PetscSFGetGraph(patch->defaultSF, NULL, &nroots, NULL, NULL); CHKERRQ(ierr);
 
+    ierr = ISGetSize(gtol, &nleaves); CHKERRQ(ierr);
     ierr = ISGetIndices(gtol, &gtolArray); CHKERRQ(ierr);
 
     ierr = PetscMalloc1(nleaves, &iremote); CHKERRQ(ierr);
@@ -635,9 +651,9 @@ static PetscErrorCode PCPatchCreateGlobalToLocalSF(PetscSF gtolSF,
         iremote[i].index = gtolArray[i];
     }
     ierr = ISRestoreIndices(gtol, &gtolArray); CHKERRQ(ierr);
-    ierr = PetscSFSetGraph(localSF, nroots, nleaves, NULL, PETSC_OWN_POINTER,
-                           iremote, PETSC_OWN_POINTER);
-    ierr = PetscSFCompose(gtolSF, localSF, sf); CHKERRQ(ierr);
+    ierr = PetscSFSetGraph(localSF, nroots, nleaves, NULL,
+                           PETSC_OWN_POINTER, iremote, PETSC_OWN_POINTER);
+    ierr = PetscSFCompose(patch->defaultSF, localSF, &patch->globalToLocal); CHKERRQ(ierr);
     ierr = PetscSFDestroy(&localSF); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
@@ -661,7 +677,12 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     ierr = PetscSectionDestroy(&patch->bcCounts); CHKERRQ(ierr);
     ierr = ISDestroy(&patch->cells); CHKERRQ(ierr);
     ierr = ISDestroy(&patch->dofs); CHKERRQ(ierr);
-    ierr = ISDestroy(&patch->bcs); CHKERRQ(ierr);
+    if (patch->bcs) {
+        for ( i = 0; i < patch->npatch; i++ ) {
+            ierr = ISDestroy(&patch->bcs[i]); CHKERRQ(ierr);
+        }
+        ierr = PetscFree(patch->bcs); CHKERRQ(ierr);
+    }
 
     if (patch->free_type) {
         ierr = MPI_Type_free(&patch->data_type); CHKERRQ(ierr);
@@ -785,7 +806,8 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, PetscInt which)
     ierr = ISRestoreIndices(patch->dofs, &dofsArray); CHKERRQ(ierr);
     ierr = ISRestoreIndices(patch->cells, &cellsArray); CHKERRQ(ierr);
     /* Apply boundary conditions.  Could also do this through the local_to_patch guy. */
-    /* ierr = MatZeroRowsColumnsIS(mat, patch->bcNodes[which-pStart], (PetscScalar)1.0, NULL, NULL); CHKERRQ(ierr); */
+    ierr = MatZeroRowsColumnsIS(mat, patch->bcs[which-pStart], (PetscScalar)1.0, NULL, NULL); CHKERRQ(ierr);
+    ierr = MatView(mat, NULL); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -816,26 +838,19 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
             ierr = MPI_Type_commit(&patch->data_type); CHKERRQ(ierr);
             patch->free_type = PETSC_TRUE;
         }
-        ierr = PCPatchCreateCellPatches(patch->dm, &patch->cellCounts, &patch->cells); CHKERRQ(ierr);
-        ierr = PetscSectionGetChart(patch->cellCounts, &pStart, &pEnd); CHKERRQ(ierr);
-        patch->npatch = pEnd - pStart;
-        ierr = PCPatchCreateCellPatchFacets(patch->dm, patch->cellCounts, patch->cells, &facetCounts, &facets); CHKERRQ(ierr);
-        ierr = PCPatchCreateCellPatchDiscretisationInfo(patch->dm, patch->cellCounts, patch->cells, facetCounts,
-                                                        facets, patch->cellNumbering,
-                                                        patch->nodesPerCell, patch->cellNodeMap,
-                                                        &patch->dofs, &gtolCounts, &gtol); CHKERRQ(ierr);
-        ierr = PCPatchCreateCellPatchBCs(patch->dm, patch->numBcs, patch->bcNodes,
-                                         facetCounts, facets, gtolCounts, gtol,
-                                         patch->dofSection, &patch->bcCounts, &patch->bcs); CHKERRQ(ierr);
+        ierr = PCPatchCreateCellPatches(pc); CHKERRQ(ierr);
+        ierr = PCPatchCreateCellPatchFacets(pc, &facetCounts, &facets); CHKERRQ(ierr);
+        ierr = PCPatchCreateCellPatchDiscretisationInfo(pc, facetCounts, facets, &gtolCounts, &gtol); CHKERRQ(ierr);
+        ierr = PCPatchCreateCellPatchBCs(pc, facetCounts, facets, gtolCounts, gtol); CHKERRQ(ierr);
         ierr = PetscSectionDestroy(&facetCounts); CHKERRQ(ierr);
         ierr = ISDestroy(&facets); CHKERRQ(ierr);
 
-        ierr = PCPatchCreateGlobalToLocalSF(patch->defaultSF, gtolCounts, gtol,
-                                            &patch->globalToLocal); CHKERRQ(ierr);
-
+        ierr = PCPatchCreateGlobalToLocalSF(pc, gtol); CHKERRQ(ierr);
         ierr = ISDestroy(&gtol); CHKERRQ(ierr);
+
         /* OK, now build the work vectors */
         ierr = PetscSectionGetStorageSize(gtolCounts, &localSize); CHKERRQ(ierr);
+        ierr = PetscSectionGetChart(gtolCounts, &pStart, &pEnd); CHKERRQ(ierr);
         localSize *= patch->bs;
         ierr = VecCreateSeq(PETSC_COMM_SELF, localSize, &patch->localX); CHKERRQ(ierr);
         ierr = VecSetBlockSize(patch->localX, patch->bs); CHKERRQ(ierr);
@@ -910,7 +925,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
         ierr = PetscSectionGetDof(patch->localToPatch, i + pStart, &len); CHKERRQ(ierr);
         ierr = PetscSectionGetOffset(patch->localToPatch, i + pStart, &start); CHKERRQ(ierr);
         if ( len <= 0 ) {
-            SETERRQ(PETSC_COMM_SELF, PETSC_ERR_ARG_SIZ, "Did not find correct length for localToPatch mapping\n"); CHKERRQ(ierr);
+            continue;
         }
         start *= patch->bs;
         ierr = VecPlaceArray(patch->patchX[i], localX + start); CHKERRQ(ierr);
