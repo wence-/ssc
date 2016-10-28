@@ -102,6 +102,3 @@ cdef class PC(petsc4py.PETSc.PC):
         context = (operator, args, kargs)
         self.set_attr("__compute_operator__", context)
         CHKERR( PCPatchSetComputeOperator(self.pc, PCPatch_ComputeOperator, <void *>context) )
-
-                                             
-            
