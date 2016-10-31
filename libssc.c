@@ -620,7 +620,7 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
         ierr = PetscMalloc1(numBcs, &bcsArray); CHKERRQ(ierr);
         ierr = PetscHashIGetKeys(localBcs, &bcIndex, bcsArray); CHKERRQ(ierr);
         ierr = PetscSortInt(numBcs, bcsArray); CHKERRQ(ierr);
-        ierr = ISCreateBlock(PETSC_COMM_SELF, patch->bs, numBcs, bcsArray, PETSC_OWN_POINTER, &(patch->bcs[v - vStart])); CHKERRQ(ierr);
+        ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, bcsArray, PETSC_OWN_POINTER, &(patch->bcs[v - vStart])); CHKERRQ(ierr);
     }
     ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
     ierr = ISRestoreIndices(gtol, &gtolArray); CHKERRQ(ierr);
@@ -940,6 +940,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
         ierr = PetscSectionGetDof(patch->gtolCounts, i + pStart, &len); CHKERRQ(ierr);
         ierr = PetscSectionGetOffset(patch->gtolCounts, i + pStart, &start); CHKERRQ(ierr);
         if ( len <= 0 ) {
+            /* TODO: Squash out these guys in the setup as well. */
             continue;
         }
         ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
@@ -949,15 +950,15 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
         /* TODO: Do we need different scatters for X and Y? */
         ierr = VecGetArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
         /* Apply bcs to patchX (zero entries) */
-        ierr = ISBlockGetLocalSize(patch->bcs[i], &numBcs); CHKERRQ(ierr);
-        ierr = ISBlockGetIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
+        ierr = ISGetLocalSize(patch->bcs[i], &numBcs); CHKERRQ(ierr);
+        ierr = ISGetIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
         for ( PetscInt j = 0; j < numBcs; j++ ) {
             for ( PetscInt k = 0; k < patch->bs; k++ ) {
                 const PetscInt idx = bcNodes[j]*patch->bs + k;
                 patchX[idx] = 0;
             }
         }
-        ierr = ISBlockRestoreIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
+        ierr = ISRestoreIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
         ierr = VecRestoreArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
         if (!patch->save_operators) {
             Mat mat;
