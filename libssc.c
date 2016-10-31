@@ -4,6 +4,26 @@
 #include <petscsf.h>
 #include <libssc.h>
 
+PetscLogEvent PC_Patch_CreatePatches, PC_Patch_ComputeOp;
+
+static PetscBool PCPatchPackageInitialized = PETSC_FALSE;
+
+#undef __FUNCT__
+#define __FUNCT__ "PCPatchInitializePackage"
+PETSC_EXTERN PetscErrorCode PCPatchInitializePackage(void)
+{
+    PetscErrorCode ierr;
+    PetscFunctionBegin;
+
+    if (PCPatchPackageInitialized) PetscFunctionReturn(0);
+    PCPatchPackageInitialized = PETSC_TRUE;
+    ierr = PCRegister("patch", PCCreate_PATCH); CHKERRQ(ierr);
+    ierr = PetscLogEventRegister("PCPATCHCreate", PC_CLASSID, &PC_Patch_CreatePatches); CHKERRQ(ierr);
+    ierr = PetscLogEventRegister("PCPATCHCompute", PC_CLASSID, &PC_Patch_ComputeOp); CHKERRQ(ierr);
+
+    PetscFunctionReturn(0);
+}
+
 typedef struct {
     DM              dm;         /* DMPlex object describing mesh
                                  * topology (need not be the same as
@@ -39,38 +59,6 @@ typedef struct {
     PetscErrorCode (*usercomputeop)(PC, Mat, PetscInt, const PetscInt *, PetscInt, const PetscInt *, void *);
     void           *usercomputectx;
 } PC_PATCH;
-
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchView_CSR_Private"
-static PetscErrorCode PCPatchView_CSR_Private(PetscSection sec, IS is, PetscViewer viewer)
-{
-    PetscErrorCode ierr;
-    PetscInt pStart, pEnd, idx;
-    const PetscInt *array;
-    PetscFunctionBegin;
-
-    ierr = PetscSectionGetChart(sec, &pStart, &pEnd); CHKERRQ(ierr);
-
-    ierr = ISGetIndices(is, &array); CHKERRQ(ierr);
-    idx = 0;
-    for ( PetscInt p = pStart; p < pEnd; p++ ) {
-        PetscInt dof, offset;
-        ierr = PetscSectionGetDof(sec, p, &dof); CHKERRQ(ierr);
-        ierr = PetscSectionGetOffset(sec, p, &offset); CHKERRQ(ierr);
-        if (dof > 0) {
-            ierr = PetscViewerASCIIPrintf(viewer, "%d: [", idx++); CHKERRQ(ierr);
-            for ( PetscInt i = offset; i < dof + offset; i++ ) {
-                if (i == dof + offset - 1) {
-                    ierr = PetscViewerASCIIPrintf(viewer, "%d]\n", array[i]); CHKERRQ(ierr);
-                } else {
-                   ierr = PetscViewerASCIIPrintf(viewer, "%d, ", array[i]); CHKERRQ(ierr);
-                }
-            }
-        }
-    }
-    ierr = ISRestoreIndices(is, &array); CHKERRQ(ierr);
-    PetscFunctionReturn(0);
-}
 
 #undef __FUNCT__
 #define __FUNCT__ "PCPatchSetDMPlex"
@@ -173,6 +161,7 @@ PETSC_EXTERN PetscErrorCode PCPatchSetComputeOperator(PC pc, PetscErrorCode (*fu
 
     PetscFunctionReturn(0);
 }
+
 #undef __FUNCT__
 #define __FUNCT__ "PCPatchCreateCellPatches"
 /*
@@ -645,7 +634,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
     PetscFunctionReturn(0);
 }
 
-
 #undef __FUNCT__
 #define __FUNCT__ "PCReset_PATCH"
 static PetscErrorCode PCReset_PATCH(PC pc)
@@ -757,7 +745,6 @@ static PetscErrorCode PCPatchCreateMatrix(PC pc, Vec x, Vec y, Mat *mat)
     PetscFunctionReturn(0);
 }
 
-
 #undef __FUNCT__
 #define __FUNCT__ "PCPatchComputeOperator"
 static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, PetscInt which)
@@ -770,6 +757,7 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, PetscInt which)
 
     PetscFunctionBegin;
 
+    ierr = PetscLogEventBegin(PC_Patch_ComputeOp, pc, 0, 0, 0); CHKERRQ(ierr);
     if (!patch->usercomputeop) {
         SETERRQ(PETSC_COMM_SELF, PETSC_ERR_ARG_WRONGSTATE, "Must call PCPatchSetComputeOperator() to set user callback\n");
     }
@@ -791,6 +779,7 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, PetscInt which)
     ierr = ISRestoreIndices(patch->cells, &cellsArray); CHKERRQ(ierr);
     /* Apply boundary conditions.  Could also do this through the local_to_patch guy. */
     ierr = MatZeroRowsColumnsIS(mat, patch->bcs[which-pStart], (PetscScalar)1.0, NULL, NULL); CHKERRQ(ierr);
+    ierr = PetscLogEventEnd(PC_Patch_ComputeOp, pc, 0, 0, 0); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -809,6 +798,7 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
         IS           facets;
         PetscInt     pStart, pEnd;
         PetscInt     localSize;
+        ierr = PetscLogEventBegin(PC_Patch_CreatePatches, pc, 0, 0, 0); CHKERRQ(ierr);
         switch (patch->bs) {
         case 1:
             patch->data_type = MPIU_SCALAR;
@@ -860,6 +850,7 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
                 ierr = PCPatchCreateMatrix(pc, patch->patchX[i], patch->patchY[i], patch->mat + i); CHKERRQ(ierr);
             }
         }
+        ierr = PetscLogEventEnd(PC_Patch_CreatePatches, pc, 0, 0, 0); CHKERRQ(ierr);
     }
     if (patch->save_operators) {
         for ( PetscInt i = 0; i < patch->npatch; i++ ) {
@@ -875,6 +866,8 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
     PetscFunctionReturn(0);
 }
 
+#undef __FUNCT__
+#define __FUNCT__ "PCPatch_ScatterLocal_Private"
 static PetscErrorCode PCPatch_ScatterLocal_Private(PC pc, PetscInt p,
                                                    Vec x, Vec y,
                                                    InsertMode mode,
@@ -1121,7 +1114,7 @@ PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
     patch->sub_mat_type      = NULL;
     pc->data                 = (void *)patch;
     pc->ops->apply           = PCApply_PATCH;
-    pc->ops->applytranspose  = 0; //PCApplyTranspose_PATCH;
+    pc->ops->applytranspose  = 0; /* PCApplyTranspose_PATCH; */
     pc->ops->setup           = PCSetUp_PATCH;
     pc->ops->reset           = PCReset_PATCH;
     pc->ops->destroy         = PCDestroy_PATCH;

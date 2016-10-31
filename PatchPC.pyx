@@ -8,7 +8,6 @@ cdef extern from "petsc.h" nogil:
     ctypedef double PetscScalar
     ctypedef enum PetscBool:
         PETSC_TRUE, PETSC_FALSE
-    int PCRegister(const char *, int (*)(PETSc.PetscPC))
 
 cdef extern from "libssc.h" nogil:
     int PCPatchSetDMPlex(PETSc.PetscPC, PETSc.PetscDM)
@@ -22,6 +21,7 @@ cdef extern from "libssc.h" nogil:
     int PCPatchSetComputeOperator(PETSc.PetscPC, int (*)(PETSc.PetscPC, PETSc.PetscMat, PetscInt, const PetscInt *, PetscInt, const PetscInt *, void *) except -1, void*)
     int PCCreate_PATCH(PETSc.PetscPC)
     int PetscObjectReference(void *)
+    int PCPatchInitializePackage()
 
 cdef extern from *:
     void PyErr_SetObject(object, object)
@@ -46,8 +46,6 @@ cdef inline object toInt(PetscInt value):
     return value
 cdef inline PetscInt asInt(object value) except? -1:
     return value
-
-PCRegister(<const char *>"patch", PCCreate_PATCH)
 
 cdef int PCPatch_ComputeOperator(
     PETSc.PetscPC pc,
@@ -101,3 +99,5 @@ cdef class PC(petsc4py.PETSc.PC):
         context = (operator, args, kargs)
         self.set_attr("__compute_operator__", context)
         CHKERR( PCPatchSetComputeOperator(self.pc, PCPatch_ComputeOperator, <void *>context) )
+
+PCPatchInitializePackage()
