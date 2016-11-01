@@ -130,7 +130,7 @@ PETSC_EXTERN PetscErrorCode PCPatchSetDiscretisationInfo(PC pc, PetscSection dof
     patch->nodesPerCell = nodesPerCell;
     /* Not freed here. */
     patch->cellNodeMap = cellNodeMap;
-    ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, bcNodes, PETSC_USE_POINTER, &patch->bcNodes); CHKERRQ(ierr);
+    ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, bcNodes, PETSC_COPY_VALUES, &patch->bcNodes); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
