@@ -1,6 +1,6 @@
-from distutils.core import setup
-from distutils.extension import Extension
-from glob import glob
+from setuptools import setup
+from setuptools import Extension
+from Cython.Distutils import build_ext
 from os import environ as env, path
 import os
 import sys
@@ -22,17 +22,8 @@ def get_petsc_dir():
         except ImportError:
             sys.exit("""Error: Could not find PETSc library.
 
-Set the environment variable PETSC_DIR to your local PETSc base
-directory or install PETSc from PyPI as described in the manual:
-
-http://firedrakeproject.org/obtaining_pyop2.html#petsc
-""")
-
-from Cython.Distutils import build_ext
-import versioneer
-
-cmdclass = versioneer.get_cmdclass()
-cmdclass['build_ext'] = build_ext
+Set the environment variable PETSC_DIR / PETSC_ARCH to your local
+PETSc base directory or install PETSc via pip.""")
 
 if 'CC' not in env:
     env['CC'] = "mpicc"
@@ -41,13 +32,14 @@ petsc_dirs = get_petsc_dir()
 include_dirs = [np.get_include(), petsc4py.get_include()]
 include_dirs += ["%s/include" % d for d in petsc_dirs]
 
+link_dir = os.path.join(os.path.dirname(__file__), "ssc")
+
 setup(name='ssc',
-      cmdclass=cmdclass,
-      packages=["."],
-      ext_modules=[Extension('PatchPC',
-                             sources=["PatchPC.pyx"],
+      cmdclass={'build_ext': build_ext},
+      packages=["ssc"],
+      ext_modules=[Extension('ssc.PatchPC',
+                             sources=["ssc/PatchPC.pyx"],
                              include_dirs=include_dirs,
-                             extra_link_args = ["-L."] +
-                             ["-Wl,-rpath,%s" % os.path.abspath(".")],
+                             extra_link_args=["-L" + link_dir] +
+                             ["-Wl,-rpath," + link_dir],
                              libraries=["ssc"])])
-                             
