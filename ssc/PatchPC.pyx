@@ -70,6 +70,13 @@ cdef int PCPatch_ComputeOperator(
 
 cdef class PC(petsc4py.PETSc.PC):
 
+    @staticmethod
+    def cast(PETSc.PC input not None):
+        cdef PC pc = PC()
+        pc.pc = input.pc
+        CHKERR( PetscObjectReference(<void *>pc.pc) )
+        return pc
+
     def setPatchDMPlex(self, PETSc.DM dm not None):
         CHKERR( PCPatchSetDMPlex(self.pc, dm.dm) )
 
@@ -99,5 +106,6 @@ cdef class PC(petsc4py.PETSc.PC):
         context = (operator, args, kargs)
         self.set_attr("__compute_operator__", context)
         CHKERR( PCPatchSetComputeOperator(self.pc, PCPatch_ComputeOperator, <void *>context) )
+
 
 PCPatchInitializePackage()

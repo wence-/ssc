@@ -32,7 +32,7 @@ petsc_dirs = get_petsc_dir()
 include_dirs = [np.get_include(), petsc4py.get_include()]
 include_dirs += ["%s/include" % d for d in petsc_dirs]
 
-link_dir = os.path.join(os.path.dirname(__file__), "ssc")
+link_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "ssc"))
 
 setup(name='ssc',
       cmdclass={'build_ext': build_ext},
