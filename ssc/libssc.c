@@ -252,7 +252,9 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
             }
         }
     }
-    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, &closureSize, &closure); CHKERRQ(ierr);
+    if (closure) {
+        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, &closureSize, &closure); CHKERRQ(ierr);
+    }
 
     ierr = ISCreateGeneral(PETSC_COMM_SELF, numCells, cellsArray, PETSC_OWN_POINTER, &patch->cells); CHKERRQ(ierr);
     ierr = PetscSectionGetChart(patch->cellCounts, &pStart, &pEnd); CHKERRQ(ierr);
@@ -508,16 +510,18 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
                 PetscHashIAdd(ht, globalDof, localDof);
             }
         }
-        /* Shove it in the output data structure. */
-        ierr = PetscSectionGetOffset(gtolCounts, v, &off); CHKERRQ(ierr);
-        PetscHashIIterBegin(ht, hi);
-        while (!PetscHashIIterAtEnd(ht, hi)) {
-            PetscInt globalDof, localDof;
-            PetscHashIIterGetKeyVal(ht, hi, globalDof, localDof);
-            if (globalDof >= 0) {
-                globalDofsArray[off + localDof] = globalDof;
+        if (dof > 0) {
+            /* Shove it in the output data structure. */
+            ierr = PetscSectionGetOffset(gtolCounts, v, &off); CHKERRQ(ierr);
+            PetscHashIIterBegin(ht, hi);
+            while (!PetscHashIIterAtEnd(ht, hi)) {
+                PetscInt globalDof, localDof;
+                PetscHashIIterGetKeyVal(ht, hi, globalDof, localDof);
+                if (globalDof >= 0) {
+                    globalDofsArray[off + localDof] = globalDof;
+                }
+                PetscHashIIterNext(ht, hi);
             }
-            PetscHashIIterNext(ht, hi);
         }
     }
     ierr = ISRestoreIndices(cells, &cellsArray);
@@ -622,7 +626,9 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
         ierr = PetscSortInt(numBcs, bcsArray); CHKERRQ(ierr);
         ierr = ISCreateBlock(PETSC_COMM_SELF, patch->bs, numBcs, bcsArray, PETSC_OWN_POINTER, &(patch->bcs[v - vStart])); CHKERRQ(ierr);
     }
-    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
+    if (closure) {
+        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
+    }
     ierr = ISRestoreIndices(gtol, &gtolArray); CHKERRQ(ierr);
     ierr = ISRestoreIndices(facets, &facetsArray); CHKERRQ(ierr);
     PetscHashIDestroy(localBcs);
