@@ -620,7 +620,7 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
         ierr = PetscMalloc1(numBcs, &bcsArray); CHKERRQ(ierr);
         ierr = PetscHashIGetKeys(localBcs, &bcIndex, bcsArray); CHKERRQ(ierr);
         ierr = PetscSortInt(numBcs, bcsArray); CHKERRQ(ierr);
-        ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, bcsArray, PETSC_OWN_POINTER, &(patch->bcs[v - vStart])); CHKERRQ(ierr);
+        ierr = ISCreateBlock(PETSC_COMM_SELF, patch->bs, numBcs, bcsArray, PETSC_OWN_POINTER, &(patch->bcs[v - vStart])); CHKERRQ(ierr);
     }
     ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
     ierr = ISRestoreIndices(gtol, &gtolArray); CHKERRQ(ierr);
@@ -812,7 +812,7 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
             patch->free_type = PETSC_TRUE;
         }
         ierr = PetscSectionGetStorageSize(patch->dofSection, &localSize); CHKERRQ(ierr);
-        ierr = VecCreateSeq(PETSC_COMM_SELF, localSize, &patch->localX); CHKERRQ(ierr);
+        ierr = VecCreateSeq(PETSC_COMM_SELF, localSize*patch->bs, &patch->localX); CHKERRQ(ierr);
         ierr = VecSetBlockSize(patch->localX, patch->bs); CHKERRQ(ierr);
         ierr = VecSetUp(patch->localX); CHKERRQ(ierr);
         ierr = VecDuplicate(patch->localX, &patch->localY); CHKERRQ(ierr);
@@ -896,11 +896,12 @@ static PetscErrorCode PCPatch_ScatterLocal_Private(PC pc, PetscInt p,
     }
     for ( PetscInt i = 0; i < size; i++ ) {
         for ( PetscInt j = 0; j < patch->bs; j++ ) {
-            const PetscInt idx = gtolArray[i + offset]*patch->bs + j;
+            const PetscInt gidx = gtolArray[i + offset]*patch->bs + j;
+            const PetscInt lidx = i*patch->bs + j;
             if (mode == INSERT_VALUES) {
-                yArray[i] = xArray[idx];
+                yArray[lidx] = xArray[gidx];
             } else {
-                yArray[idx] += xArray[i];
+                yArray[gidx] += xArray[lidx];
             }
         }
     }
@@ -950,15 +951,15 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
         /* TODO: Do we need different scatters for X and Y? */
         ierr = VecGetArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
         /* Apply bcs to patchX (zero entries) */
-        ierr = ISGetLocalSize(patch->bcs[i], &numBcs); CHKERRQ(ierr);
-        ierr = ISGetIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
+        ierr = ISBlockGetLocalSize(patch->bcs[i], &numBcs); CHKERRQ(ierr);
+        ierr = ISBlockGetIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
         for ( PetscInt j = 0; j < numBcs; j++ ) {
             for ( PetscInt k = 0; k < patch->bs; k++ ) {
                 const PetscInt idx = bcNodes[j]*patch->bs + k;
                 patchX[idx] = 0;
             }
         }
-        ierr = ISRestoreIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
+        ierr = ISBlockRestoreIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
         ierr = VecRestoreArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
         if (!patch->save_operators) {
             Mat mat;
