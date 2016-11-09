@@ -175,7 +175,6 @@ def setup_patch_pc(patch, J, bcs):
     mesh = V.ufl_domain()
 
     bc_nodes = numpy.unique(numpy.concatenate([b.nodes for b in bcs]))
-    bc_nodes = bc_nodes[bc_nodes < V.dof_dset.size]
 
     op_coeffs = [mesh.coordinates]
     for n in kinfo.coefficient_map:

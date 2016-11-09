@@ -929,7 +929,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     PetscScalar       *globalY = NULL;
     PetscScalar       *patchX  = NULL;
     const PetscInt    *bcNodes = NULL;
-    PetscInt           pStart, numBcs;
+    PetscInt           pStart, numBcs, size;
     
     PetscFunctionBegin;
 
@@ -1000,10 +1000,13 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = VecGetArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = ISGetSize(patch->bcNodes, &numBcs); CHKERRQ(ierr);
     ierr = ISGetIndices(patch->bcNodes, &bcNodes); CHKERRQ(ierr);
+    ierr = VecGetLocalSize(x, &size); CHKERRQ(ierr);
     for ( PetscInt i = 0; i < numBcs; i++ ) {
         for ( PetscInt j = 0; j < patch->bs; j++ ) {
             const PetscInt idx = patch->bs * bcNodes[i] + j;
-            globalY[idx] = globalX[idx];
+            if (idx < size) {
+                globalY[idx] = globalX[idx];
+            }
         }
     }
     ierr = ISRestoreIndices(patch->bcNodes, &bcNodes); CHKERRQ(ierr);
