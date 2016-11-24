@@ -159,7 +159,7 @@ class P1PC(firedrake.PCBase):
         bc_iset.destroy()
 
     def update(self, pc):
-        firedrake.assemble(self.lo_J, self.lo_bcs, tensor=self.lo_op)
+        firedrake.assemble(self.lo_J, bcs=self.lo_bcs, tensor=self.lo_op)
         self.lo_op.force_evaluation()
 
     def apply(self, pc, x, y):
