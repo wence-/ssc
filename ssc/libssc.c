@@ -160,6 +160,7 @@ PETSC_EXTERN PetscErrorCode PCPatchSetComputeOperator(PC pc, PetscErrorCode (*fu
     PC_PATCH *patch = (PC_PATCH *)pc->data;
 
     PetscFunctionBegin;
+    /* User op can assume matrix is zeroed */
     patch->usercomputeop = func;
     patch->usercomputectx = ctx;
 
@@ -864,6 +865,7 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
     }
     if (patch->save_operators) {
         for ( PetscInt i = 0; i < patch->npatch; i++ ) {
+            ierr = MatZeroEntries(patch->mat[i]); CHKERRQ(ierr);
             ierr = PCPatchComputeOperator(pc, patch->mat[i], i); CHKERRQ(ierr);
             ierr = KSPSetOperators(patch->ksp[i], patch->mat[i], patch->mat[i]); CHKERRQ(ierr);
         }
