@@ -138,9 +138,13 @@ PETSC_EXTERN PetscErrorCode PCPatchSetDiscretisationInfo(PC pc, PetscSection dof
 #define __FUNCT__ "PCPatchSetSubMatType"
 PETSC_EXTERN PetscErrorCode PCPatchSetSubMatType(PC pc, MatType sub_mat_type)
 {
-    PC_PATCH *patch = (PC_PATCH *)pc->data;
+    PetscErrorCode ierr;
+    PC_PATCH      *patch = (PC_PATCH *)pc->data;
     PetscFunctionBegin;
-    patch->sub_mat_type = sub_mat_type;
+    if (patch->sub_mat_type) {
+        ierr = PetscFree(patch->sub_mat_type); CHKERRQ(ierr);
+    }
+    ierr = PetscStrallocpy(sub_mat_type, (char **)&patch->sub_mat_type); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -978,7 +982,11 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
         }
         ierr = KSPSolve(patch->ksp[i], patch->patchX[i], patch->patchY[i]); CHKERRQ(ierr);
         if (!patch->save_operators) {
+            PC pc;
             ierr = KSPSetOperators(patch->ksp[i], NULL, NULL); CHKERRQ(ierr);
+            ierr = KSPGetPC(patch->ksp[i], &pc); CHKERRQ(ierr);
+            /* Destroy PC context too, otherwise the factored matrix hangs around. */
+            ierr = PCReset(pc); CHKERRQ(ierr);
         }
 
         ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
