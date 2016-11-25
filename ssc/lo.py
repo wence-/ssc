@@ -140,9 +140,25 @@ class P1PC(firedrake.PCBase):
 
         self.lo_bcs = tuple(lo_bcs)
 
-        self.lo_op = firedrake.assemble(self.lo_J, bcs=self.lo_bcs)
+        mat_type = PETSc.Options().getString(pc.getOptionsPrefix() + "lo_mat_type", None)
+        self.lo_op = firedrake.assemble(self.lo_J, bcs=self.lo_bcs,
+                                        mat_type=mat_type)
         self.lo_op.force_evaluation()
-
+        A, P = pc.getOperators()
+        nearnullsp = P.getNearNullSpace()
+        if nearnullsp.handle != 0:
+            # Actually have a near nullspace
+            tmp = firedrake.Function(Pk)
+            low = firedrake.Function(P1)
+            vecs = []
+            for vec in nearnullsp.getVecs():
+                with tmp.dat.vec as v:
+                    vec.copy(v)
+                low.interpolate(tmp)
+                with low.dat.vec_ro as v:
+                    vecs.append(v.copy())
+            nullsp = PETSc.NullSpace().create(vectors=vecs, comm=pc.comm)
+            self.lo_op.petscmat.setNearNullSpace(nullsp)
         lo = PETSc.PC().create(comm=pc.comm)
         lo.setOperators(self.lo_op.petscmat, self.lo_op.petscmat)
         lo.setOptionsPrefix(pc.getOptionsPrefix() + "lo_")
