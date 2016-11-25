@@ -140,7 +140,8 @@ class P1PC(firedrake.PCBase):
 
         self.lo_bcs = tuple(lo_bcs)
 
-        mat_type = PETSc.Options().getString(pc.getOptionsPrefix() + "lo_mat_type", None)
+        mat_type = PETSc.Options().getString(pc.getOptionsPrefix() + "lo_mat_type",
+                                             firedrake.parameters["default_matrix_type"])
         self.lo_op = firedrake.assemble(self.lo_J, bcs=self.lo_bcs,
                                         mat_type=mat_type)
         self.lo_op.force_evaluation()
