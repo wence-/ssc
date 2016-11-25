@@ -4,7 +4,7 @@
 #include <petscsf.h>
 #include <libssc.h>
 
-PetscLogEvent PC_Patch_CreatePatches, PC_Patch_ComputeOp;
+PetscLogEvent PC_Patch_CreatePatches, PC_Patch_ComputeOp, PC_Patch_Solve, PC_Patch_Scatter;
 
 static PetscBool PCPatchPackageInitialized = PETSC_FALSE;
 
@@ -19,7 +19,9 @@ PETSC_EXTERN PetscErrorCode PCPatchInitializePackage(void)
     PCPatchPackageInitialized = PETSC_TRUE;
     ierr = PCRegister("patch", PCCreate_PATCH); CHKERRQ(ierr);
     ierr = PetscLogEventRegister("PCPATCHCreate", PC_CLASSID, &PC_Patch_CreatePatches); CHKERRQ(ierr);
-    ierr = PetscLogEventRegister("PCPATCHCompute", PC_CLASSID, &PC_Patch_ComputeOp); CHKERRQ(ierr);
+    ierr = PetscLogEventRegister("PCPATCHComputeOp", PC_CLASSID, &PC_Patch_ComputeOp); CHKERRQ(ierr);
+    ierr = PetscLogEventRegister("PCPATCHSolve", PC_CLASSID, &PC_Patch_Solve); CHKERRQ(ierr);
+    ierr = PetscLogEventRegister("PCPATCHScatter", PC_CLASSID, &PC_Patch_Scatter); CHKERRQ(ierr);
 
     PetscFunctionReturn(0);
 }
@@ -893,6 +895,7 @@ static PetscErrorCode PCPatch_ScatterLocal_Private(PC pc, PetscInt p,
     PetscInt offset, size;
 
     PetscFunctionBeginHot;
+    ierr = PetscLogEventBegin(PC_Patch_Scatter, pc, 0, 0, 0); CHKERRQ(ierr);
 
     ierr = VecGetArrayRead(x, &xArray); CHKERRQ(ierr);
     ierr = VecGetArray(y, &yArray); CHKERRQ(ierr);
@@ -920,6 +923,7 @@ static PetscErrorCode PCPatch_ScatterLocal_Private(PC pc, PetscInt p,
     ierr = VecRestoreArrayRead(x, &xArray); CHKERRQ(ierr);
     ierr = VecRestoreArray(y, &yArray); CHKERRQ(ierr);
     ierr = ISRestoreIndices(patch->gtol, &gtolArray); CHKERRQ(ierr);
+    ierr = PetscLogEventEnd(PC_Patch_Scatter, pc, 0, 0, 0); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -982,7 +986,9 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
             /* Drop reference so the KSPSetOperators below will blow it away. */
             ierr = MatDestroy(&mat); CHKERRQ(ierr);
         }
+        ierr = PetscLogEventBegin(PC_Patch_Solve, pc, 0, 0, 0); CHKERRQ(ierr);
         ierr = KSPSolve(patch->ksp[i], patch->patchX[i], patch->patchY[i]); CHKERRQ(ierr);
+        ierr = PetscLogEventEnd(PC_Patch_Solve, pc, 0, 0, 0); CHKERRQ(ierr);
         if (!patch->save_operators) {
             PC pc;
             ierr = KSPSetOperators(patch->ksp[i], NULL, NULL); CHKERRQ(ierr);
