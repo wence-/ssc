@@ -943,6 +943,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     
     PetscFunctionBegin;
 
+    ierr = PetscOptionsPushGetViewerOff(PETSC_TRUE); CHKERRQ(ierr);
     ierr = VecGetArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecGetArray(patch->localX, &localX); CHKERRQ(ierr);
     /* Scatter from global space into overlapped local spaces */
@@ -1028,6 +1029,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = ISRestoreIndices(patch->bcNodes, &bcNodes); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
+    ierr = PetscOptionsPopGetViewerOff(); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
