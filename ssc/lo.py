@@ -134,8 +134,10 @@ class P1PC(firedrake.PCBase):
 
         lo_bcs = []
         for bc in self.bcs:
-            val = firedrake.interpolate(firedrake.as_ufl(bc.function_arg), P1)
-            lo_bcs.append(firedrake.DirichletBC(P1, val, bc.sub_domain,
+            # Don't actually need the value, since it's only used for
+            # killing parts of the restriction matrix.
+            lo_bcs.append(firedrake.DirichletBC(P1, firedrake.zero(P1.shape),
+                                                bc.sub_domain,
                                                 method=bc.method))
 
         self.lo_bcs = tuple(lo_bcs)
