@@ -170,12 +170,15 @@ class P1PC(firedrake.PCBase):
         self.restriction = restriction_matrix(Pk, P1, self.bcs, self.lo_bcs)
 
         self.work = self.lo_op.petscmat.createVecs()
-        bc_nodes = numpy.unique(numpy.concatenate([bc.nodes for bc in self.bcs]))
-        bc_nodes = bc_nodes[bc_nodes < Pk.dof_dset.size]
-        bc_iset = PETSc.IS().createBlock(numpy.prod(shape), bc_nodes,
-                                         comm=PETSc.COMM_SELF)
-        self.bc_indices = bc_iset.getIndices()
-        bc_iset.destroy()
+        if len(self.bcs) > 0:
+            bc_nodes = numpy.unique(numpy.concatenate([bc.nodes for bc in self.bcs]))
+            bc_nodes = bc_nodes[bc_nodes < Pk.dof_dset.size]
+            bc_iset = PETSc.IS().createBlock(numpy.prod(shape), bc_nodes,
+                                             comm=PETSc.COMM_SELF)
+            self.bc_indices = bc_iset.getIndices()
+            bc_iset.destroy()
+        else:
+            self.bc_indices = numpy.empty(0, dtype=numpy.int32)
 
     def update(self, pc):
         firedrake.assemble(self.lo_J, bcs=self.lo_bcs, tensor=self.lo_op)

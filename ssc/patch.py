@@ -174,7 +174,10 @@ def setup_patch_pc(patch, J, bcs):
     V, _ = map(operator.methodcaller("function_space"), J.arguments())
     mesh = V.ufl_domain()
 
-    bc_nodes = numpy.unique(numpy.concatenate([b.nodes for b in bcs]))
+    if len(bcs) > 0:
+        bc_nodes = numpy.unique(numpy.concatenate([b.nodes for b in bcs]))
+    else:
+        bc_nodes = numpy.empty(0, dtype=numpy.int32)
 
     op_coeffs = [mesh.coordinates]
     for n in kinfo.coefficient_map:
