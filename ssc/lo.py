@@ -61,15 +61,17 @@ def transfer_kernel(Pk, P1):
     k = gem.Index()
     indices = i, j, k
     A = gem.Variable("A", shape)
-    outgem = [gem.FlexiblyIndexed(A, ((0, ((i, P1e.space_dimension()),
-                                           (k, Vout.dim))),
-                                      (0, ((j, Pke.space_dimension()),
-                                           (k, Vin.dim)))))]
+
+    outgem = [gem.Indexed(gem.reshape(A,
+                                      (P1e.space_dimension(), Vout.dim),
+                                      (Pke.space_dimension(), Vin.dim)),
+                          (i, k, j, k))]
 
     funargs.append(outarg)
 
     exprs = [gem.Indexed(weights, (i, j))]
 
+    outgem = imp.preprocess_gem(outgem)
     ir = imp.compile_gem(outgem, exprs, indices)
 
     index_names = [(i, "i"), (j, "j"), (k, "k")]
