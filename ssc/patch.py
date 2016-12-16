@@ -54,38 +54,6 @@ class MatArg(seq.Arg):
         addto = 'MatSetValues'
         if self.data._is_vector_field:
             addto = 'MatSetValuesBlocked'
-            if self._flatten:
-                if applied_blas:
-                    idx = "[(%%(ridx)s)*%d + (%%(cidx)s)]" % rdim
-                else:
-                    idx = "[%(ridx)s][%(cidx)s]"
-                ret = []
-                idx_l = idx % {'ridx': "%d*j + k" % rbs,
-                               'cidx': "%d*l + m" % cbs}
-                idx_r = idx % {'ridx': "j + %d*k" % nrows,
-                               'cidx': "l + %d*m" % ncols}
-                # Shuffle xxx yyy zzz into xyz xyz xyz
-                ret = ["""
-                %(tmp_decl)s;
-                for ( int j = 0; j < %(nrows)d; j++ ) {
-                   for ( int k = 0; k < %(rbs)d; k++ ) {
-                      for ( int l = 0; l < %(ncols)d; l++ ) {
-                         for ( int m = 0; m < %(cbs)d; m++ ) {
-                            %(tmp_name)s%(idx_l)s = %(buf_name)s%(idx_r)s;
-                         }
-                      }
-                   }
-                }""" % {'nrows': nrows,
-                        'ncols': ncols,
-                        'rbs': rbs,
-                        'cbs': cbs,
-                        'idx_l': idx_l,
-                        'idx_r': idx_r,
-                        'buf_name': buf_name,
-                        'tmp_decl': tmp_decl,
-                        'tmp_name': tmp_name}]
-                addto_name = tmp_name
-
             rmap, cmap = maps
             rdim, cdim = self.data.dims[i][j]
             if rmap.vector_index is not None or cmap.vector_index is not None:
@@ -110,10 +78,10 @@ class DenseMat(pyop2.Mat):
         self._sparsity = DenseSparsity(rset, cset)
         self.dtype = numpy.dtype(PETSc.ScalarType)
 
-    def __call__(self, access, path, flatten=False):
+    def __call__(self, access, path):
         path_maps = [arg.map for arg in path]
         path_idxs = [arg.idx for arg in path]
-        return MatArg(self, path_maps, path_idxs, access, flatten)
+        return MatArg(self, path_maps, path_idxs, access)
 
 
 class JITModule(seq.JITModule):
@@ -146,20 +114,18 @@ def matrix_funptr(form):
     mat = DenseMat(test.dof_dset, trial.dof_dset)
 
     arg = mat(op2.INC, (test.cell_node_map()[op2.i[0]],
-                        trial.cell_node_map()[op2.i[1]]),
-              flatten=True)
+                        trial.cell_node_map()[op2.i[1]]))
     arg.position = 0
     args.append(arg)
 
     mesh = form.ufl_domains()[kinfo.domain_number]
-    arg = mesh.coordinates.dat(op2.READ, mesh.coordinates.cell_node_map(),
-                               flatten=True)
+    arg = mesh.coordinates.dat(op2.READ, mesh.coordinates.cell_node_map())
     arg.position = 1
     args.append(arg)
     for n in kinfo.coefficient_map:
         c = form.coefficients()[n]
         for c_ in c.split():
-            arg = c_.dat(op2.READ, c_.cell_node_map(), flatten=True)
+            arg = c_.dat(op2.READ, c_.cell_node_map())
             arg.position = len(args)
             args.append(arg)
 
