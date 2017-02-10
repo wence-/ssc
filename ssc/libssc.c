@@ -531,6 +531,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
             }
         }
     }
+    PetscHashIDestroy(ht);
     ierr = ISRestoreIndices(cells, &cellsArray);
 
     /* Replace cell indices with firedrake-numbered ones. */
