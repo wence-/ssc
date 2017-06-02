@@ -4,7 +4,7 @@
 #include <petscsf.h>
 #include <libssc.h>
 
-PetscLogEvent PC_Patch_CreatePatches, PC_Patch_ComputeOp, PC_Patch_Solve, PC_Patch_Scatter;
+PetscLogEvent PC_Patch_CreatePatches, PC_Patch_ComputeOp, PC_Patch_Solve, PC_Patch_Scatter, PC_Patch_Apply;
 
 static PetscBool PCPatchPackageInitialized = PETSC_FALSE;
 
@@ -21,6 +21,7 @@ PETSC_EXTERN PetscErrorCode PCPatchInitializePackage(void)
     ierr = PetscLogEventRegister("PCPATCHCreate", PC_CLASSID, &PC_Patch_CreatePatches); CHKERRQ(ierr);
     ierr = PetscLogEventRegister("PCPATCHComputeOp", PC_CLASSID, &PC_Patch_ComputeOp); CHKERRQ(ierr);
     ierr = PetscLogEventRegister("PCPATCHSolve", PC_CLASSID, &PC_Patch_Solve); CHKERRQ(ierr);
+    ierr = PetscLogEventRegister("PCPATCHApply", PC_CLASSID, &PC_Patch_Apply); CHKERRQ(ierr);
     ierr = PetscLogEventRegister("PCPATCHScatter", PC_CLASSID, &PC_Patch_Scatter); CHKERRQ(ierr);
 
     PetscFunctionReturn(0);
@@ -944,6 +945,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     
     PetscFunctionBegin;
 
+    ierr = PetscLogEventBegin(PC_Patch_Apply, pc, 0, 0, 0); CHKERRQ(ierr);
     ierr = PetscOptionsPushGetViewerOff(PETSC_TRUE); CHKERRQ(ierr);
     ierr = VecGetArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecGetArray(patch->localX, &localX); CHKERRQ(ierr);
@@ -1031,6 +1033,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
     ierr = PetscOptionsPopGetViewerOff(); CHKERRQ(ierr);
+    ierr = PetscLogEventEnd(PC_Patch_Apply, pc, 0, 0, 0); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
