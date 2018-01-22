@@ -68,7 +68,7 @@ cdef int PCPatch_ComputeOperator(
     op(Pc, Mat, ncell, <uintptr_t>cells, <uintptr_t>dofmap, *args, **kargs)
 
 
-cdef class PC(petsc4py.PETSc.PC):
+cdef class PC(PETSc.PC):
 
     @staticmethod
     def cast(PETSc.PC input not None):
