@@ -125,7 +125,10 @@ def matrix_funptr(form):
     for n in kinfo.coefficient_map:
         c = form.coefficients()[n]
         for c_ in c.split():
-            arg = c_.dat(op2.READ, c_.cell_node_map())[op2.i[0]]
+            map_ = c.cell_node_map()
+            if map_ is not None:
+                map_ = map_[op2.i[0]]
+            arg = c_.dat(op2.READ, map_)
             arg.position = len(args)
             args.append(arg)
 
