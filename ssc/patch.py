@@ -119,13 +119,13 @@ def matrix_funptr(form):
     args.append(arg)
 
     mesh = form.ufl_domains()[kinfo.domain_number]
-    arg = mesh.coordinates.dat(op2.READ, mesh.coordinates.cell_node_map())
+    arg = mesh.coordinates.dat(op2.READ, mesh.coordinates.cell_node_map()[op2.i[0]])
     arg.position = 1
     args.append(arg)
     for n in kinfo.coefficient_map:
         c = form.coefficients()[n]
         for c_ in c.split():
-            arg = c_.dat(op2.READ, c_.cell_node_map())
+            arg = c_.dat(op2.READ, c_.cell_node_map())[op2.i[0]]
             arg.position = len(args)
             args.append(arg)
 
