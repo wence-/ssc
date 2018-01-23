@@ -4,7 +4,7 @@ import firedrake
 from firedrake.petsc import PETSc
 
 from ssc.patch import setup_patch_pc
-from ssc.lo import P1PC
+from ssc.divprolong import DivProlong
 
 
 class SSC(firedrake.PCBase):
@@ -41,12 +41,12 @@ class SSC(firedrake.PCBase):
         combiner.setOptionsPrefix(pc.getOptionsPrefix() + "ssc_")
         combiner.setOperators(A, P)
         combiner.setType(PETSc.PC.Type.COMPOSITE)
-        combiner.addCompositePC("patch")
         combiner.addCompositePC("python")
-        patch = combiner.getCompositePC(0)
+        combiner.addCompositePC("patch")
+        divprolong = combiner.getCompositePC(0)
+        divprolong.setPythonContext(DivProlong(J, bcs))
+        patch = combiner.getCompositePC(1)
         patch = setup_patch_pc(patch, J, bcs)
-        lo = combiner.getCompositePC(1)
-        lo.setPythonContext(P1PC(J, bcs))
         self.combiner = combiner
         self.combiner.setFromOptions()
 
