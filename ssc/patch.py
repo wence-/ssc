@@ -129,8 +129,8 @@ def matrix_funptr(form):
             arg.position = len(args)
             args.append(arg)
 
-    itspace = pyop2.build_itspace(args, op2.Subset(mesh.cell_set, [0]))
-    mod = JITModule(kinfo.kernel, itspace, *args)
+    iterset = op2.Subset(mesh.cell_set, [0])
+    mod = JITModule(kinfo.kernel, iterset, *args)
     return mod._fun, kinfo
 
 
@@ -165,7 +165,7 @@ def setup_patch_pc(patch, J, bcs):
     patch.setPatchDefaultSF(V.dm.getDefaultSF())
     patch.setPatchCellNumbering(mesh._cell_numbering)
     patch.setPatchDiscretisationInfo(V.dm.getDefaultSection(),
-                                     V.dim, V.cell_node_list,
+                                     V.value_size, V.cell_node_list,
                                      bc_nodes)
     patch.setPatchComputeOperator(op)
     return patch

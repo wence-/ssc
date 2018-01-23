@@ -37,24 +37,25 @@ def transfer_kernel(Pk, P1):
     from gem import gem, impero_utils as imp
 
     # Pk should be at least the same size as P1
-    assert Pk.fiat_element.space_dimension() >= P1.fiat_element.space_dimension()
+    assert Pk.finat_element.space_dimension() >= P1.finat_element.space_dimension()
     # In the general case we should compute this by doing:
     # numpy.linalg.solve(Pkmass, PkP1mass)
-    matrix = numpy.dot(Pk.fiat_element.dual.to_riesz(P1.fiat_element.get_nodal_basis()),
-                       P1.fiat_element.get_coeffs().T).T
+    Pke = Pk.finat_element._element
+    P1e = P1.finat_element._element
+    # TODO, rework to use finat.
+    matrix = numpy.dot(Pke.dual.to_riesz(P1e.get_nodal_basis()),
+                       P1e.get_coeffs().T).T
 
     Vout, Vin = P1, Pk
     weights = gem.Literal(matrix)
     name = "Pk_P1_mapper"
 
     funargs = []
-    Pke = Vin.fiat_element
-    P1e = Vout.fiat_element
 
     assert Vin.shape == Vout.shape
 
-    shape = (P1e.space_dimension() * Vout.dim,
-             Pke.space_dimension() * Vin.dim)
+    shape = (P1e.space_dimension() * Vout.value_size,
+             Pke.space_dimension() * Vin.value_size)
     outarg = coffee.Decl(SCALAR_TYPE, coffee.Symbol("A", rank=shape))
     i = gem.Index()
     j = gem.Index()
@@ -63,19 +64,19 @@ def transfer_kernel(Pk, P1):
     A = gem.Variable("A", shape)
 
     outgem = [gem.Indexed(gem.reshape(A,
-                                      (P1e.space_dimension(), Vout.dim),
-                                      (Pke.space_dimension(), Vin.dim)),
+                                      (P1e.space_dimension(), Vout.value_size),
+                                      (Pke.space_dimension(), Vin.value_size)),
                           (i, k, j, k))]
 
     funargs.append(outarg)
 
-    exprs = [gem.Indexed(weights, (i, j))]
+    expr = gem.Indexed(weights, (i, j))
 
-    outgem = imp.preprocess_gem(outgem)
-    ir = imp.compile_gem(outgem, exprs, indices)
+    outgem, = imp.preprocess_gem(outgem)
+    ir = imp.compile_gem([(outgem, expr)], indices)
 
     index_names = [(i, "i"), (j, "j"), (k, "k")]
-    body = generate_coffee(ir, index_names, default_parameters()["precision"], exprs)
+    body = generate_coffee(ir, index_names, default_parameters()["precision"])
     function = coffee.FunDecl("void", name, funargs, body,
                               pred=["static", "inline"])
 

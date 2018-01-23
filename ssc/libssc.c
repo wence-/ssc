@@ -187,9 +187,9 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
     PetscErrorCode  ierr;
     PC_PATCH       *patch      = (PC_PATCH *)pc->data;
     DM              dm;
-    DMLabel         core, non_core;
+    DMLabel         ghost;
     PetscInt        pStart, pEnd, vStart, vEnd, cStart, cEnd;
-    PetscBool       flg1, flg2;
+    PetscBool       flg;
     PetscInt        closureSize;
     PetscInt       *closure    = NULL;
     PetscInt       *cellsArray = NULL;
@@ -208,11 +208,9 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
 
     /* These labels mark the owned points.  We only create patches
      * around vertices that this process owns. */
-    ierr = DMGetLabel(dm, "op2_core", &core); CHKERRQ(ierr);
-    ierr = DMGetLabel(dm, "op2_non_core", &non_core); CHKERRQ(ierr);
+    ierr = DMGetLabel(dm, "pyop2_ghost", &ghost); CHKERRQ(ierr);
 
-    ierr = DMLabelCreateIndex(core, pStart, pEnd); CHKERRQ(ierr);
-    ierr = DMLabelCreateIndex(non_core, pStart, pEnd); CHKERRQ(ierr);
+    ierr = DMLabelCreateIndex(ghost, pStart, pEnd); CHKERRQ(ierr);
 
     ierr = PetscSectionCreate(PETSC_COMM_SELF, &patch->cellCounts); CHKERRQ(ierr);
     cellCounts = patch->cellCounts;
@@ -220,10 +218,9 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
 
     /* Count cells surrounding each vertex */
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
-        ierr = DMLabelHasPoint(core, v, &flg1); CHKERRQ(ierr);
-        ierr = DMLabelHasPoint(non_core, v, &flg2); CHKERRQ(ierr);
+        ierr = DMLabelHasPoint(ghost, v, &flg); CHKERRQ(ierr);
         /* Not an owned vertex, don't make a cell patch. */
-        if (!(flg1 || flg2)) {
+        if (flg) {
             continue;
         }
         ierr = DMPlexGetTransitiveClosure(dm, v, PETSC_FALSE, &closureSize, &closure); CHKERRQ(ierr);
@@ -234,8 +231,7 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
             }
         }
     }
-    ierr = DMLabelDestroyIndex(core); CHKERRQ(ierr);
-    ierr = DMLabelDestroyIndex(non_core); CHKERRQ(ierr);
+    ierr = DMLabelDestroyIndex(ghost); CHKERRQ(ierr);
 
     ierr = PetscSectionSetUp(cellCounts); CHKERRQ(ierr);
     ierr = PetscSectionGetStorageSize(cellCounts, &numCells); CHKERRQ(ierr);
