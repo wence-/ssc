@@ -56,6 +56,7 @@ typedef struct {
 
     KSP            *ksp;        /* Solvers for each patch */
     Vec             localX, localY;
+    Vec             dof_weights; /* In how many patches does each dof lie? */
     Vec            *patchX, *patchY; /* Work vectors for patches */
     Mat            *mat;        /* Operators */
     MatType         sub_mat_type;
@@ -795,12 +796,63 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, PetscInt which)
 }
 
 #undef __FUNCT__
+#define __FUNCT__ "PCPatch_ScatterLocal_Private"
+static PetscErrorCode PCPatch_ScatterLocal_Private(PC pc, PetscInt p,
+                                                   Vec x, Vec y,
+                                                   InsertMode mode,
+                                                   ScatterMode scat)
+{
+    PetscErrorCode ierr;
+    PC_PATCH          *patch   = (PC_PATCH *)pc->data;
+    const PetscScalar *xArray = NULL;
+    PetscScalar *yArray = NULL;
+    const PetscInt *gtolArray = NULL;
+    PetscInt offset, size;
+
+    PetscFunctionBeginHot;
+    ierr = PetscLogEventBegin(PC_Patch_Scatter, pc, 0, 0, 0); CHKERRQ(ierr);
+
+    ierr = VecGetArrayRead(x, &xArray); CHKERRQ(ierr);
+    ierr = VecGetArray(y, &yArray); CHKERRQ(ierr);
+
+    ierr = PetscSectionGetDof(patch->gtolCounts, p, &size); CHKERRQ(ierr);
+    ierr = PetscSectionGetOffset(patch->gtolCounts, p, &offset); CHKERRQ(ierr);
+    ierr = ISGetIndices(patch->gtol, &gtolArray); CHKERRQ(ierr);
+    if (mode == INSERT_VALUES && scat != SCATTER_FORWARD) {
+        SETERRQ(PETSC_COMM_SELF, PETSC_ERR_ARG_INCOMP, "Can't insert if not scattering forward\n");
+    }
+    if (mode == ADD_VALUES && scat != SCATTER_REVERSE) {
+        SETERRQ(PETSC_COMM_SELF, PETSC_ERR_ARG_INCOMP, "Can't add if not scattering reverse\n");
+    }
+    for ( PetscInt i = 0; i < size; i++ ) {
+        for ( PetscInt j = 0; j < patch->bs; j++ ) {
+            const PetscInt gidx = gtolArray[i + offset]*patch->bs + j;
+            const PetscInt lidx = i*patch->bs + j;
+            if (mode == INSERT_VALUES) {
+                yArray[lidx] = xArray[gidx];
+            } else {
+                yArray[gidx] += xArray[lidx];
+            }
+        }
+    }
+    ierr = VecRestoreArrayRead(x, &xArray); CHKERRQ(ierr);
+    ierr = VecRestoreArray(y, &yArray); CHKERRQ(ierr);
+    ierr = ISRestoreIndices(patch->gtol, &gtolArray); CHKERRQ(ierr);
+    ierr = PetscLogEventEnd(PC_Patch_Scatter, pc, 0, 0, 0); CHKERRQ(ierr);
+    PetscFunctionReturn(0);
+}
+
+
+#undef __FUNCT__
 #define __FUNCT__ "PCSetUp_PATCH"
 static PetscErrorCode PCSetUp_PATCH(PC pc)
 {
     PetscErrorCode  ierr;
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
     const char     *prefix;
+    PetscScalar    *patchX  = NULL;
+    PetscInt       pStart, numBcs;
+    const PetscInt *bcNodes = NULL;
 
     PetscFunctionBegin;
 
@@ -867,27 +919,29 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
      * patches.  Then store these weights patchwise to use in PCApply.
      */
 
-    ierr = VecCopy(patch->localX, &patch->dof_weights); CHKERRQ(ierr);
-    for ( PetscInt i = 0; i < patch->npatch; i++ ) {
-        ierr = VecSet(patch->patchX[i], 1.0); CHKERRQ(ierr);
-        /* TODO: Do we need different scatters for X and Y? */
-        ierr = VecGetArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
-        /* Apply bcs to patchX (zero entries) */
-        ierr = ISBlockGetLocalSize(patch->bcs[i], &numBcs); CHKERRQ(ierr);
-        ierr = ISBlockGetIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
-        for ( PetscInt j = 0; j < numBcs; j++ ) {
-            for ( PetscInt k = 0; k < patch->bs; k++ ) {
-                const PetscInt idx = bcNodes[j]*patch->bs + k;
-                patchX[idx] = 0;
-            }
-        }
-        ierr = ISBlockRestoreIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
-        ierr = VecRestoreArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
-        ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-                                            patch->patchY[i], patch->dof_weights,
-                                            ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
-    }
-    ierr = VecReciprocal(patch->dof_weights); CHKERRQ(ierr);
+//    ierr = VecDuplicate(patch->localX, &patch->dof_weights); CHKERRQ(ierr);
+//    ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
+//    for ( PetscInt i = 0; i < patch->npatch; i++ ) {
+//        ierr = VecSet(patch->patchX[i], 1.0); CHKERRQ(ierr);
+//        /* TODO: Do we need different scatters for X and Y? */
+//        ierr = VecGetArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
+//        /* Apply bcs to patchX (zero entries) */
+//        ierr = ISBlockGetLocalSize(patch->bcs[i], &numBcs); CHKERRQ(ierr);
+//        ierr = ISBlockGetIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
+//        for ( PetscInt j = 0; j < numBcs; j++ ) {
+//            for ( PetscInt k = 0; k < patch->bs; k++ ) {
+//                const PetscInt idx = bcNodes[j]*patch->bs + k;
+//                patchX[idx] = 0;
+//            }
+//        }
+//        ierr = ISBlockRestoreIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
+//        ierr = VecRestoreArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
+//        ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
+//                                            patch->patchY[i], patch->dof_weights,
+//                                            ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
+//    }
+//    ierr = VecView(patch->dof_weights, PETSC_VIEWER_STDOUT_WORLD);CHKERRQ(ierr);
+//    ierr = VecReciprocal(patch->dof_weights); CHKERRQ(ierr);
 
     if (patch->save_operators) {
         for ( PetscInt i = 0; i < patch->npatch; i++ ) {
@@ -901,53 +955,6 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
             ierr = KSPSetFromOptions(patch->ksp[i]); CHKERRQ(ierr);
         }
     }
-    PetscFunctionReturn(0);
-}
-
-#undef __FUNCT__
-#define __FUNCT__ "PCPatch_ScatterLocal_Private"
-static PetscErrorCode PCPatch_ScatterLocal_Private(PC pc, PetscInt p,
-                                                   Vec x, Vec y,
-                                                   InsertMode mode,
-                                                   ScatterMode scat)
-{
-    PetscErrorCode ierr;
-    PC_PATCH          *patch   = (PC_PATCH *)pc->data;
-    const PetscScalar *xArray = NULL;
-    PetscScalar *yArray = NULL;
-    const PetscInt *gtolArray = NULL;
-    PetscInt offset, size;
-
-    PetscFunctionBeginHot;
-    ierr = PetscLogEventBegin(PC_Patch_Scatter, pc, 0, 0, 0); CHKERRQ(ierr);
-
-    ierr = VecGetArrayRead(x, &xArray); CHKERRQ(ierr);
-    ierr = VecGetArray(y, &yArray); CHKERRQ(ierr);
-
-    ierr = PetscSectionGetDof(patch->gtolCounts, p, &size); CHKERRQ(ierr);
-    ierr = PetscSectionGetOffset(patch->gtolCounts, p, &offset); CHKERRQ(ierr);
-    ierr = ISGetIndices(patch->gtol, &gtolArray); CHKERRQ(ierr);
-    if (mode == INSERT_VALUES && scat != SCATTER_FORWARD) {
-        SETERRQ(PETSC_COMM_SELF, PETSC_ERR_ARG_INCOMP, "Can't insert if not scattering forward\n");
-    }
-    if (mode == ADD_VALUES && scat != SCATTER_REVERSE) {
-        SETERRQ(PETSC_COMM_SELF, PETSC_ERR_ARG_INCOMP, "Can't add if not scattering reverse\n");
-    }
-    for ( PetscInt i = 0; i < size; i++ ) {
-        for ( PetscInt j = 0; j < patch->bs; j++ ) {
-            const PetscInt gidx = gtolArray[i + offset]*patch->bs + j;
-            const PetscInt lidx = i*patch->bs + j;
-            if (mode == INSERT_VALUES) {
-                yArray[lidx] = xArray[gidx];
-            } else {
-                yArray[gidx] += xArray[lidx];
-            }
-        }
-    }
-    ierr = VecRestoreArrayRead(x, &xArray); CHKERRQ(ierr);
-    ierr = VecRestoreArray(y, &yArray); CHKERRQ(ierr);
-    ierr = ISRestoreIndices(patch->gtol, &gtolArray); CHKERRQ(ierr);
-    ierr = PetscLogEventEnd(PC_Patch_Scatter, pc, 0, 0, 0); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -1013,7 +1020,6 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
             ierr = MatDestroy(&mat); CHKERRQ(ierr);
         }
         ierr = PetscLogEventBegin(PC_Patch_Solve, pc, 0, 0, 0); CHKERRQ(ierr);
-        "Solve patch"
         ierr = KSPSolve(patch->ksp[i], patch->patchX[i], patch->patchY[i]); CHKERRQ(ierr);
         ierr = PetscLogEventEnd(PC_Patch_Solve, pc, 0, 0, 0); CHKERRQ(ierr);
         if (!patch->save_operators) {
