@@ -954,8 +954,6 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
                                                 ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
         }
         ierr = VecReciprocal(patch->dof_weights); CHKERRQ(ierr);
-        ierr = VecView(patch->dof_weights, PETSC_VIEWER_STDOUT_WORLD);CHKERRQ(ierr);
-        printf("patch->partition_of_unity = %d\n", patch->partition_of_unity);
     }
 
     if (patch->save_operators) {
