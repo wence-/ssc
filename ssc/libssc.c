@@ -863,6 +863,32 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
         }
         ierr = PetscLogEventEnd(PC_Patch_CreatePatches, pc, 0, 0, 0); CHKERRQ(ierr);
     }
+    /* XXX: could add code here to compute weighting multiplicity of
+     * patches.  Then store these weights patchwise to use in PCApply.
+     */
+
+    ierr = VecCopy(patch->localX, &patch->dof_weights); CHKERRQ(ierr);
+    for ( PetscInt i = 0; i < patch->npatch; i++ ) {
+        ierr = VecSet(patch->patchX[i], 1.0); CHKERRQ(ierr);
+        /* TODO: Do we need different scatters for X and Y? */
+        ierr = VecGetArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
+        /* Apply bcs to patchX (zero entries) */
+        ierr = ISBlockGetLocalSize(patch->bcs[i], &numBcs); CHKERRQ(ierr);
+        ierr = ISBlockGetIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
+        for ( PetscInt j = 0; j < numBcs; j++ ) {
+            for ( PetscInt k = 0; k < patch->bs; k++ ) {
+                const PetscInt idx = bcNodes[j]*patch->bs + k;
+                patchX[idx] = 0;
+            }
+        }
+        ierr = ISBlockRestoreIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
+        ierr = VecRestoreArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
+        ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
+                                            patch->patchY[i], patch->dof_weights,
+                                            ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
+    }
+    ierr = VecReciprocal(patch->dof_weights); CHKERRQ(ierr);
+
     if (patch->save_operators) {
         for ( PetscInt i = 0; i < patch->npatch; i++ ) {
             ierr = MatZeroEntries(patch->mat[i]); CHKERRQ(ierr);
