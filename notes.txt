@@ -1,0 +1,18 @@
+* Custom prolong/restrict, etc...
+
+Need to attach these to the DM that's made in a FunctionSpace.
+
+Add method to FunctionSpace for user to provide
+prolong/restriction/injection overriding the defaults.
+
+Refactor so defaults are delivered through this mechanism first.
+
+Then you'll need to make sure these are propagated to coarse grid
+DM/FunctionSpace objects.
+
+See functionspaceimpl.FunctionSpace._dm for where the DM is currently
+created.
+
+And dmhooks.py for where the hook attachment is done.
+
+

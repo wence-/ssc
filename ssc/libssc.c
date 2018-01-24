@@ -998,6 +998,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
             ierr = PCReset(pc); CHKERRQ(ierr);
         }
 
+        /* XXX: This bit needs changed for multiplicative combinations. */
         ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
                                             patch->patchY[i], patch->localY,
                                             ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
