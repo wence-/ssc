@@ -999,6 +999,8 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
         }
 
         /* XXX: This bit needs changed for multiplicative combinations. */
+        /* XXX: pef thinks "do we not need to weight these
+         * contributions by the dof multiplicity?" */
         ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
                                             patch->patchY[i], patch->localY,
                                             ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
