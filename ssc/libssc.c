@@ -48,6 +48,7 @@ typedef struct {
     PetscBool       free_type;
 
     PetscBool       save_operators; /* Save all operators (or create/destroy one at a time?) */
+    PetscBool       partition_of_unity; /* Weight updates by dof multiplicity? */
     PetscInt        npatch;     /* Number of patches */
     PetscInt        bs;            /* block size (can come from global
                                     * operators?) */
@@ -85,6 +86,17 @@ PETSC_EXTERN PetscErrorCode PCPatchSetSaveOperators(PC pc, PetscBool flg)
     PetscFunctionBegin;
 
     patch->save_operators = flg;
+    PetscFunctionReturn(0);
+}
+
+#undef __FUNCT__
+#define __FUNCT__ "PCPatchSetPartitionOfUnity"
+PETSC_EXTERN PetscErrorCode PCPatchSetPartitionOfUnity(PC pc, PetscBool flg)
+{
+    PC_PATCH       *patch = (PC_PATCH *)pc->data;
+    PetscFunctionBegin;
+
+    patch->partition_of_unity = flg;
     PetscFunctionReturn(0);
 }
 
@@ -915,33 +927,36 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
         }
         ierr = PetscLogEventEnd(PC_Patch_CreatePatches, pc, 0, 0, 0); CHKERRQ(ierr);
     }
-    /* XXX: could add code here to compute weighting multiplicity of
-     * patches.  Then store these weights patchwise to use in PCApply.
-     */
 
-//    ierr = VecDuplicate(patch->localX, &patch->dof_weights); CHKERRQ(ierr);
-//    ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
-//    for ( PetscInt i = 0; i < patch->npatch; i++ ) {
-//        ierr = VecSet(patch->patchX[i], 1.0); CHKERRQ(ierr);
-//        /* TODO: Do we need different scatters for X and Y? */
-//        ierr = VecGetArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
-//        /* Apply bcs to patchX (zero entries) */
-//        ierr = ISBlockGetLocalSize(patch->bcs[i], &numBcs); CHKERRQ(ierr);
-//        ierr = ISBlockGetIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
-//        for ( PetscInt j = 0; j < numBcs; j++ ) {
-//            for ( PetscInt k = 0; k < patch->bs; k++ ) {
-//                const PetscInt idx = bcNodes[j]*patch->bs + k;
-//                patchX[idx] = 0;
-//            }
-//        }
-//        ierr = ISBlockRestoreIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
-//        ierr = VecRestoreArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
-//        ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-//                                            patch->patchY[i], patch->dof_weights,
-//                                            ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
-//    }
-//    ierr = VecView(patch->dof_weights, PETSC_VIEWER_STDOUT_WORLD);CHKERRQ(ierr);
-//    ierr = VecReciprocal(patch->dof_weights); CHKERRQ(ierr);
+    /* If desired, calculate weights for dof multiplicity */
+
+    if (patch->partition_of_unity) {
+        ierr = VecDuplicate(patch->localX, &patch->dof_weights); CHKERRQ(ierr);
+        ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
+        for ( PetscInt i = 0; i < patch->npatch; i++ ) {
+            ierr = VecSet(patch->patchX[i], 1.0); CHKERRQ(ierr);
+            /* TODO: Do we need different scatters for X and Y? */
+            ierr = VecGetArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
+            /* Apply bcs to patchX (zero entries) */
+            ierr = ISBlockGetLocalSize(patch->bcs[i], &numBcs); CHKERRQ(ierr);
+            ierr = ISBlockGetIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
+            for ( PetscInt j = 0; j < numBcs; j++ ) {
+                for ( PetscInt k = 0; k < patch->bs; k++ ) {
+                    const PetscInt idx = bcNodes[j]*patch->bs + k;
+                    patchX[idx] = 0;
+                }
+            }
+            ierr = ISBlockRestoreIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
+            ierr = VecRestoreArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
+
+            ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
+                                                patch->patchX[i], patch->dof_weights,
+                                                ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
+        }
+        ierr = VecReciprocal(patch->dof_weights); CHKERRQ(ierr);
+        ierr = VecView(patch->dof_weights, PETSC_VIEWER_STDOUT_WORLD);CHKERRQ(ierr);
+        printf("patch->partition_of_unity = %d\n", patch->partition_of_unity);
+    }
 
     if (patch->save_operators) {
         for ( PetscInt i = 0; i < patch->npatch; i++ ) {
@@ -1047,6 +1062,11 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = PetscSFReduceBegin(patch->defaultSF, patch->data_type, localY, globalY, MPI_SUM); CHKERRQ(ierr);
     ierr = PetscSFReduceEnd(patch->defaultSF, patch->data_type, localY, globalY, MPI_SUM); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(patch->localY, (const PetscScalar **)&localY); CHKERRQ(ierr);
+    if (patch->partition_of_unity) {
+        ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
+        ierr = VecPointwiseMult(y, y, patch->dof_weights); CHKERRQ(ierr);
+        ierr = VecGetArray(y, &globalY); CHKERRQ(ierr);
+    }
 
     /* Now we need to send the global BC values through */
     ierr = VecGetArrayRead(x, &globalX); CHKERRQ(ierr);
@@ -1104,6 +1124,9 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
 
     ierr = PetscOptionsBool("-pc_patch_save_operators", "Store all patch operators for lifetime of PC?",
                             "PCPatchSetSaveOperators", patch->save_operators, &patch->save_operators, &flg); CHKERRQ(ierr);
+
+    ierr = PetscOptionsBool("-pc_patch_partition_of_unity", "Weight contributions by dof multiplicity?",
+                            "PCPatchSetPartitionOfUnity", patch->partition_of_unity, &patch->partition_of_unity, &flg); CHKERRQ(ierr);
 
     ierr = PetscOptionsFList("-pc_patch_sub_mat_type", "Matrix type for patch solves", "PCPatchSetSubMatType",MatList, NULL, sub_mat_type, 256, &flg); CHKERRQ(ierr);
     if (flg) {

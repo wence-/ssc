@@ -1,4 +1,4 @@
-CFLAGS = -I.
+CFLAGS = -I. -O0
 
 include ${PETSC_DIR}/lib/petsc/conf/variables
 
