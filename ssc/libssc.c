@@ -49,6 +49,7 @@ typedef struct {
 
     PetscBool       save_operators; /* Save all operators (or create/destroy one at a time?) */
     PetscBool       partition_of_unity; /* Weight updates by dof multiplicity? */
+    PetscBool       multiplicative; /* Gauss-Seidel or Jacobi? */
     PetscInt        npatch;     /* Number of patches */
     PetscInt        bs;            /* block size (can come from global
                                     * operators?) */
@@ -97,6 +98,17 @@ PETSC_EXTERN PetscErrorCode PCPatchSetPartitionOfUnity(PC pc, PetscBool flg)
     PetscFunctionBegin;
 
     patch->partition_of_unity = flg;
+    PetscFunctionReturn(0);
+}
+
+#undef __FUNCT__
+#define __FUNCT__ "PCPatchSetMultiplicative"
+PETSC_EXTERN PetscErrorCode PCPatchSetMultiplicative(PC pc, PetscBool flg)
+{
+    PC_PATCH       *patch = (PC_PATCH *)pc->data;
+    PetscFunctionBegin;
+
+    patch->multiplicative = flg;
     PetscFunctionReturn(0);
 }
 
@@ -1126,6 +1138,9 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
     ierr = PetscOptionsBool("-pc_patch_partition_of_unity", "Weight contributions by dof multiplicity?",
                             "PCPatchSetPartitionOfUnity", patch->partition_of_unity, &patch->partition_of_unity, &flg); CHKERRQ(ierr);
 
+    ierr = PetscOptionsBool("-pc_patch_multiplicative", "Gauss-Seidel instead of Jacobi?",
+                            "PCPatchSetMultiplicative", patch->multiplicative, &patch->multiplicative, &flg); CHKERRQ(ierr);
+
     ierr = PetscOptionsFList("-pc_patch_sub_mat_type", "Matrix type for patch solves", "PCPatchSetSubMatType",MatList, NULL, sub_mat_type, 256, &flg); CHKERRQ(ierr);
     if (flg) {
         ierr = PCPatchSetSubMatType(pc, sub_mat_type); CHKERRQ(ierr);
@@ -1185,7 +1200,7 @@ static PetscErrorCode PCView_PATCH(PC pc, PetscViewer viewer)
     PetscFunctionReturn(0);
 }
 
-        
+
 #undef __FUNCT__
 #define __FUNCT__ "PCCreate_PATCH"
 PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
@@ -1197,7 +1212,12 @@ PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
 
     ierr = PetscNewLog(pc, &patch); CHKERRQ(ierr);
 
-    patch->sub_mat_type      = NULL;
+    /* Set some defaults */
+    patch->sub_mat_type       = NULL;
+    patch->save_operators     = PETSC_TRUE;
+    patch->partition_of_unity = PETSC_FALSE;
+    patch->multiplicative     = PETSC_FALSE;
+
     pc->data                 = (void *)patch;
     pc->ops->apply           = PCApply_PATCH;
     pc->ops->applytranspose  = 0; /* PCApplyTranspose_PATCH; */
