@@ -1059,11 +1059,6 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     PetscScalar       *patchX  = NULL;
     const PetscInt    *bcNodes = NULL;
     PetscInt           pStart, numBcs, size;
-
-    Vec localXupdate;
-    Vec residual;
-    Vec residualupdate;
-
     PetscFunctionBegin;
 
     ierr = PetscLogEventBegin(PC_Patch_Apply, pc, 0, 0, 0); CHKERRQ(ierr);
@@ -1077,15 +1072,6 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = VecRestoreArray(patch->localX, &localX); CHKERRQ(ierr);
     ierr = VecSet(patch->localY, 0.0); CHKERRQ(ierr);
     ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
-
-    if (patch->multiplicative) {
-        /* FIXME: in the fullness of time, get rid of this ... there must be a better way */
-        ierr = VecDuplicate(patch->localX, &localXupdate); CHKERRQ(ierr);
-        ierr = VecDuplicate(x, &residual); CHKERRQ(ierr);
-        ierr = VecDuplicate(x, &residualupdate); CHKERRQ(ierr);
-        ierr = VecCopy(x, residual); CHKERRQ(ierr);
-    }
-
     for ( PetscInt i = 0; i < patch->npatch; i++ ) {
         PetscInt start, len;
         Mat multMat;
@@ -1141,58 +1127,26 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
             ierr = PCReset(pc); CHKERRQ(ierr);
         }
 
-        if (patch->multiplicative) {
-            /* figure out what the change to our residual is as a result
-               of the update we've just computed, and subtract it off */
+        ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
+                                            patch->patchY[i], patch->localY,
+                                            ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
 
-            /* FIXME: this is extremely slow: we propagate the influence in
-               several stages. Ultimately, we need the influence to propagate
-               into each copy of the residual data in localX, but do it via
-               going back into globalX and scattering it out. There must be
-               a better way */
+        /* Get the matrix on the patch but with only global bcs applied.
+         * This matrix is then multiplied with the result from the previous solve
+         * to obtain by how much the residual changes. */
 
+        if(patch->multiplicative){
             ierr = MatMult(multMat, patch->patchY[i], patch->patchX[i]); CHKERRQ(ierr);
-
-            ierr = VecSet(localXupdate, 0.0); CHKERRQ(ierr);
+            ierr = VecScale(patch->patchX[i], -1.0); CHKERRQ(ierr);
             ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-                                                patch->patchX[i], localXupdate,
+                                                patch->patchX[i], patch->localX,
                                                 ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
-
-            ierr = VecSet(residualupdate, 0.0); CHKERRQ(ierr);
-            ierr = VecGetArrayRead(localXupdate, (const PetscScalar **)&localY); CHKERRQ(ierr);
-            ierr = VecGetArray(residualupdate, &globalY); CHKERRQ(ierr);
-            ierr = PetscSFReduceBegin(patch->defaultSF, patch->data_type, localY, globalY, MPI_SUM); CHKERRQ(ierr);
-            ierr = PetscSFReduceEnd(patch->defaultSF, patch->data_type, localY, globalY, MPI_SUM); CHKERRQ(ierr);
-            ierr = VecRestoreArrayRead(localXupdate, (const PetscScalar **)&localY); CHKERRQ(ierr);
-            ierr = VecRestoreArray(residualupdate, &globalY); CHKERRQ(ierr);
-
-            ierr = VecAXPY(residual, -1.0, residualupdate); CHKERRQ(ierr);
-
-            /* Now propagate it back the way ... */
-
-            ierr = VecGetArrayRead(residual, &globalX); CHKERRQ(ierr);
-            ierr = VecGetArray(patch->localX, &localX); CHKERRQ(ierr);
-            ierr = PetscSFBcastBegin(patch->defaultSF, patch->data_type, globalX, localX); CHKERRQ(ierr);
-            ierr = PetscSFBcastEnd(patch->defaultSF, patch->data_type, globalX, localX); CHKERRQ(ierr);
-            ierr = VecRestoreArrayRead(residual, &globalX); CHKERRQ(ierr);
-            ierr = VecRestoreArray(patch->localX, &localX); CHKERRQ(ierr);
         }
 
         if (patch->multiplicative && !patch->save_operators) {
             ierr = MatDestroy(&multMat); CHKERRQ(ierr);
         }
-
-        ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-                                            patch->patchY[i], patch->localY,
-                                            ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
     }
-
-    if (patch->multiplicative) {
-        ierr = VecDestroy(&localXupdate); CHKERRQ(ierr);
-        ierr = VecDestroy(&residual); CHKERRQ(ierr);
-        ierr = VecDestroy(&residualupdate); CHKERRQ(ierr);
-    }
-
     /* Now patch->localY contains the solution of the patch solves, so
      * we need to combine them all.  This hardcodes an ADDITIVE
      * combination right now.  If one wanted multiplicative, the
