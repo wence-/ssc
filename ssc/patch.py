@@ -96,51 +96,55 @@ def matrix_funptr(form):
     test, trial = map(operator.methodcaller("function_space"), form.arguments())
     if test != trial:
         raise NotImplementedError("Only for matching test and trial spaces")
-    if len(test) != 1:
-        raise NotImplementedError("Not for mixed spaces")
     kernels = compile_form(form, "subspace_form")
-    if len(kernels) != 1:
-        raise NotImplementedError("Only for single integral")
-    kernel = kernels[0]
-    kinfo = kernel.kinfo
-    if kinfo.subdomain_id != "otherwise":
-        raise NotImplementedError("Only for full domain integrals")
-    if kinfo.integral_type != "cell":
-        raise NotImplementedError("Only for cell integrals")
 
-    # OK, now we've validated the kernel, let's build the callback
-    args = []
+    funptrs = []
+    kinfos  = []
+    for kernel in kernels:
+        (i, j) = kernel.indices
+        kinfo = kernel.kinfo
+        if kinfo.subdomain_id != "otherwise":
+            raise NotImplementedError("Only for full domain integrals")
+        if kinfo.integral_type != "cell":
+            raise NotImplementedError("Only for cell integrals")
 
-    mat = DenseMat(test.dof_dset, trial.dof_dset)
+        # OK, now we've validated the kernel, let's build the callback
+        args = []
 
-    arg = mat(op2.INC, (test.cell_node_map()[op2.i[0]],
-                        trial.cell_node_map()[op2.i[1]]))
-    arg.position = 0
-    args.append(arg)
+        mat = DenseMat(test[i].dof_dset, trial[j].dof_dset)
 
-    mesh = form.ufl_domains()[kinfo.domain_number]
-    arg = mesh.coordinates.dat(op2.READ, mesh.coordinates.cell_node_map()[op2.i[0]])
-    arg.position = 1
-    args.append(arg)
-    for n in kinfo.coefficient_map:
-        c = form.coefficients()[n]
-        for (i, c_) in enumerate(c.split()):
-            map_ = c.cell_node_map()
-            if map_ is not None:
-                map_ = map_.split[i]
-                map_ = map_[op2.i[0]]
-            arg = c_.dat(op2.READ, map_)
-            arg.position = len(args)
-            args.append(arg)
+        arg = mat(op2.INC, (test[i].cell_node_map()[op2.i[0]],
+                            trial[j].cell_node_map()[op2.i[1]]))
+        arg.position = 0
+        args.append(arg)
 
-    iterset = op2.Subset(mesh.cell_set, [0])
-    mod = JITModule(kinfo.kernel, iterset, *args)
-    return mod._fun, kinfo
+        mesh = form.ufl_domains()[kinfo.domain_number]
+        arg = mesh.coordinates.dat(op2.READ, mesh.coordinates.cell_node_map()[op2.i[0]])
+        arg.position = 1
+        args.append(arg)
+        for n in kinfo.coefficient_map:
+            c = form.coefficients()[n]
+            for (i, c_) in enumerate(c.split()):
+                map_ = c.cell_node_map()
+                if map_ is not None:
+                    map_ = map_.split[i]
+                    map_ = map_[op2.i[0]]
+                arg = c_.dat(op2.READ, map_)
+                arg.position = len(args)
+                args.append(arg)
+
+        iterset = op2.Subset(mesh.cell_set, [0])
+        mod = JITModule(kinfo.kernel, iterset, *args)
+
+        funptrs.append(mod._fun)
+        kinfos.append(kinfo)
+
+    return funptrs, kinfos
 
 
 def setup_patch_pc(patch, J, bcs):
     patch = PatchPC.PC.cast(patch)
-    funptr, kinfo = matrix_funptr(J)
+    funptrs, kinfos = matrix_funptr(J)
     V, _ = map(operator.methodcaller("function_space"), J.arguments())
     mesh = V.ufl_domain()
 
@@ -149,21 +153,29 @@ def setup_patch_pc(patch, J, bcs):
     else:
         bc_nodes = numpy.empty(0, dtype=numpy.int32)
 
-    op_coeffs = [mesh.coordinates]
-    for n in kinfo.coefficient_map:
-        op_coeffs.append(J.coefficients()[n])
+    op_coeffs_list = []
+    op_args_list   = []
 
-    op_args = []
-    for c in op_coeffs:
-        for c_ in c.split():
-            op_args.append(c_.dat._data.ctypes.data)
-            c_map = c_.cell_node_map()
-            if c_map is not None:
-                op_args.append(c_map._values.ctypes.data)
+    for kinfo in kinfos:
+        op_coeffs = [mesh.coordinates]
+        for n in kinfo.coefficient_map:
+            op_coeffs.append(J.coefficients()[n])
+
+        op_args = []
+        for c in op_coeffs:
+            for c_ in c.split():
+                op_args.append(c_.dat._data.ctypes.data)
+                c_map = c_.cell_node_map()
+                if c_map is not None:
+                    op_args.append(c_map._values.ctypes.data)
+
+        op_coeffs_list.append(op_coeffs)
+        op_args_list.append(op_args)
 
     def op(pc, mat, ncell, cells, cell_dofmap):
-        funptr(0, ncell, cells, mat.handle,
-               cell_dofmap, cell_dofmap, *op_args)
+        for (i, funptr) in enumerate(funptrs):
+            funptr(0, ncell, cells, mat.handle,
+                   cell_dofmap, cell_dofmap, *op_args_list[i])
         mat.assemble()
     patch.setPatchDMPlex(mesh._plex)
     patch.setPatchDefaultSF(V.dm.getDefaultSF())
