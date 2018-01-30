@@ -180,8 +180,19 @@ def setup_patch_pc(patch, J, bcs):
     patch.setPatchDMPlex(mesh._plex)
     patch.setPatchDefaultSF(V.dm.getDefaultSF())
     patch.setPatchCellNumbering(mesh._cell_numbering)
-    patch.setPatchDiscretisationInfo(V.dm.getDefaultSection(),
-                                     V.value_size, V.cell_node_list,
-                                     bc_nodes)
+
+    bc_node_list = []
+    for W in V:
+        applicable_bcs = [b for b in bcs if b.function_space() == W]
+        if len(applicable_bcs) > 0:
+            bc_nodes = numpy.unique(numpy.concatenate([b.nodes for b in applicable_bcs]))
+        else:
+            bc_nodes = numpy.empty(0, dtype=numpy.int32)
+        bc_node_list.append(bc_nodes)
+
+    patch.setPatchDiscretisationInfo([W.dm.getDefaultSection() for W in V],
+                                     [W.value_size for W in V],
+                                     [W.cell_node_list for W in V],
+                                     bc_node_list)
     patch.setPatchComputeOperator(op)
     return patch

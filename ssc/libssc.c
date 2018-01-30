@@ -31,43 +31,45 @@ typedef struct {
     DM              dm;         /* DMPlex object describing mesh
                                  * topology (need not be the same as
                                  * PC's DM) */
-    PetscSF         defaultSF;
-    PetscSection    dofSection;
-    PetscSection    cellCounts;
-    PetscSection    cellNumbering; /* Numbering of cells in DM */
-    PetscSection    gtolCounts;   /* Indices to extract from local to
+    PetscSF          defaultSF;
+    PetscSection    *dofSection;
+    PetscSection     cellCounts;
+    PetscSection     cellNumbering; /* Numbering of cells in DM */
+    PetscSection     gtolCounts;   /* Indices to extract from local to
                                    * patch vectors */
-    PetscSection    bcCounts;
-    IS              cells;
-    IS              dofs;
-    IS              bcNodes;
-    IS              gtol;
-    IS             *bcs;
+    PetscInt         nsubspaces;   /* for mixed problems */
+    PetscSection     bcCounts;
+    IS               cells;
+    IS               dofs;
+    IS              *bcNodes;
+    IS               gtol;
+    IS              *bcs;
 
-    PetscSection    multBcCounts; /* these are the corresponding BC objects for just the actual */
-    IS             *multBcs;      /* Only used for multiplicative smoothing to recalculate residual */
+    PetscSection     multBcCounts; /* these are the corresponding BC objects for just the actual */
+    IS              *multBcs;      /* Only used for multiplicative smoothing to recalculate residual */
 
-    MPI_Datatype    data_type;
-    PetscBool       free_type;
+    MPI_Datatype     data_type;
+    PetscBool        free_type;
 
-    PetscBool       save_operators; /* Save all operators (or create/destroy one at a time?) */
-    PetscBool       partition_of_unity; /* Weight updates by dof multiplicity? */
-    PetscBool       multiplicative; /* Gauss-Seidel or Jacobi? */
-    PetscInt        npatch;     /* Number of patches */
-    PetscInt        bs;            /* block size (can come from global
+    PetscBool        save_operators; /* Save all operators (or create/destroy one at a time?) */
+    PetscBool        partition_of_unity; /* Weight updates by dof multiplicity? */
+    PetscBool        multiplicative; /* Gauss-Seidel or Jacobi? */
+    PetscInt         npatch;     /* Number of patches */
+    PetscInt        *bs;            /* block size (can come from global
                                     * operators?) */
-    PetscInt        nodesPerCell;
-    const PetscInt *cellNodeMap; /* Map from cells to nodes */
+    PetscInt        *nodesPerCell;
+    PetscInt         totalNodesPerCell;
+    const PetscInt **cellNodeMap; /* Map from cells to nodes */
 
-    KSP            *ksp;        /* Solvers for each patch */
-    Vec             localX, localY;
-    Vec             dof_weights; /* In how many patches does each dof lie? */
-    Vec            *patchX, *patchY; /* Work vectors for patches */
-    Mat            *mat;        /* Operators */
-    Mat            *multMat;        /* Operators for multiplicative residual calculation */
-    MatType         sub_mat_type;
-    PetscErrorCode (*usercomputeop)(PC, Mat, PetscInt, const PetscInt *, PetscInt, const PetscInt *, void *);
-    void           *usercomputectx;
+    KSP             *ksp;        /* Solvers for each patch */
+    Vec              localX, localY;
+    Vec              dof_weights; /* In how many patches does each dof lie? */
+    Vec             *patchX, *patchY; /* Work vectors for patches */
+    Mat             *mat;        /* Operators */
+    Mat             *multMat;        /* Operators for multiplicative residual calculation */
+    MatType          sub_mat_type;
+    PetscErrorCode  (*usercomputeop)(PC, Mat, PetscInt, const PetscInt *, PetscInt, const PetscInt *, void *);
+    void            *usercomputectx;
 } PC_PATCH;
 
 #undef __FUNCT__
@@ -145,24 +147,36 @@ PETSC_EXTERN PetscErrorCode PCPatchSetCellNumbering(PC pc, PetscSection cellNumb
 
 #undef __FUNCT__
 #define __FUNCT__ "PCPatchSetDiscretisationInfo"
-PETSC_EXTERN PetscErrorCode PCPatchSetDiscretisationInfo(PC pc, PetscSection dofSection,
-                                                         PetscInt bs,
-                                                         PetscInt nodesPerCell,
-                                                         const PetscInt *cellNodeMap,
-                                                         PetscInt numBcs,
-                                                         const PetscInt *bcNodes)
+PETSC_EXTERN PetscErrorCode PCPatchSetDiscretisationInfo(PC pc, PetscInt nsubspaces,
+                                                         PetscSection *dofSection,
+                                                         PetscInt *bs,
+                                                         PetscInt *nodesPerCell,
+                                                         const PetscInt **cellNodeMap,
+                                                         PetscInt *numBcs,
+                                                         const PetscInt **bcNodes)
 {
     PetscErrorCode  ierr;
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
     PetscFunctionBegin;
 
-    patch->dofSection = dofSection;
-    ierr = PetscObjectReference((PetscObject)dofSection); CHKERRQ(ierr);
-    patch->bs = bs;
-    patch->nodesPerCell = nodesPerCell;
-    /* Not freed here. */
-    patch->cellNodeMap = cellNodeMap;
-    ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, bcNodes, PETSC_COPY_VALUES, &patch->bcNodes); CHKERRQ(ierr);
+    ierr = PetscMalloc1(nsubspaces, &patch->dofSection); CHKERRQ(ierr);
+    ierr = PetscMalloc1(nsubspaces, &patch->bs); CHKERRQ(ierr);
+    ierr = PetscMalloc1(nsubspaces, &patch->nodesPerCell); CHKERRQ(ierr);
+    ierr = PetscMalloc1(nsubspaces, &patch->cellNodeMap); CHKERRQ(ierr);
+    ierr = PetscMalloc1(nsubspaces, &patch->bcNodes); CHKERRQ(ierr);
+
+    patch->nsubspaces = nsubspaces;
+    patch->totalNodesPerCell = 0;
+    for (int i = 0; i < nsubspaces; i++) {
+        patch->dofSection[i] = dofSection[i];
+        ierr = PetscObjectReference((PetscObject)dofSection[i]); CHKERRQ(ierr);
+        patch->bs[i] = bs[i];
+        patch->nodesPerCell[i] = nodesPerCell[i];
+        patch->totalNodesPerCell += nodesPerCell[i];
+        /* Not freed here. */
+        patch->cellNodeMap[i] = cellNodeMap[i];
+        ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs[i], bcNodes[i], PETSC_COPY_VALUES, &patch->bcNodes[i]); CHKERRQ(ierr);
+    }
     PetscFunctionReturn(0);
 }
 
@@ -456,11 +470,10 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
     PetscSection    gtolCounts;
     IS              cells           = patch->cells;
     PetscSection    cellNumbering   = patch->cellNumbering;
-    const PetscInt  dofsPerCell     = patch->nodesPerCell;
-    const PetscInt *cellNodeMap     = patch->cellNodeMap;
     PetscInt        numCells;
     PetscInt        numDofs;
     PetscInt        numGlobalDofs;
+    PetscInt        totalDofsPerCell = patch->totalNodesPerCell;
     PetscInt        vStart, vEnd;
     const PetscInt *cellsArray;
     PetscInt       *newCellsArray   = NULL;
@@ -472,7 +485,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
 
     /* dofcounts section is cellcounts section * dofPerCell */
     ierr = PetscSectionGetStorageSize(cellCounts, &numCells); CHKERRQ(ierr);
-    numDofs = numCells * dofsPerCell;
+    numDofs = numCells * totalDofsPerCell;
     ierr = PetscMalloc1(numDofs, &dofsArray); CHKERRQ(ierr);
     ierr = PetscMalloc1(numCells, &newCellsArray); CHKERRQ(ierr);
     ierr = PetscSectionGetChart(cellCounts, &vStart, &vEnd); CHKERRQ(ierr);
@@ -712,7 +725,6 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     PetscFunctionBegin;
     ierr = DMDestroy(&patch->dm); CHKERRQ(ierr);
     ierr = PetscSFDestroy(&patch->defaultSF); CHKERRQ(ierr);
-    ierr = PetscSectionDestroy(&patch->dofSection); CHKERRQ(ierr);
     ierr = PetscSectionDestroy(&patch->cellCounts); CHKERRQ(ierr);
     ierr = PetscSectionDestroy(&patch->cellNumbering); CHKERRQ(ierr);
     ierr = PetscSectionDestroy(&patch->gtolCounts); CHKERRQ(ierr);
@@ -720,7 +732,16 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     ierr = ISDestroy(&patch->gtol); CHKERRQ(ierr);
     ierr = ISDestroy(&patch->cells); CHKERRQ(ierr);
     ierr = ISDestroy(&patch->dofs); CHKERRQ(ierr);
-    ierr = ISDestroy(&patch->bcNodes); CHKERRQ(ierr);
+
+    for (i = 0; i++; i < patch->nsubspaces) {
+        ierr = PetscSectionDestroy(&patch->dofSection[i]); CHKERRQ(ierr);
+        ierr = ISDestroy(&patch->bcNodes[i]); CHKERRQ(ierr);
+    }
+    ierr = PetscFree(&patch->dofSection); CHKERRQ(ierr);
+    ierr = PetscFree(&patch->bs); CHKERRQ(ierr);
+    ierr = PetscFree(&patch->nodesPerCell); CHKERRQ(ierr);
+    ierr = PetscFree(&patch->cellNodeMap); CHKERRQ(ierr);
+    ierr = PetscFree(&patch->bcNodes); CHKERRQ(ierr);
 
     if (patch->bcs) {
         for ( i = 0; i < patch->npatch; i++ ) {
