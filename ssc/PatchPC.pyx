@@ -2,6 +2,7 @@ import numpy
 cimport numpy
 cimport petsc4py.PETSc as PETSc
 from libc.stdint cimport uintptr_t
+from libc.stdio cimport printf
 
 cdef extern from "petsc.h" nogil:
     int PetscMalloc1(PetscInt, void*)
@@ -95,8 +96,8 @@ cdef class PC(PETSc.PC):
                                    numpy.ndarray[PetscInt, ndim=1, mode="c"] subspaceOffsets,
                                    numpy.ndarray[PetscInt, ndim=1, mode="c"] bcNodes):
         cdef:
-            PetscInt numSubSpaces = bs.shape[0]
-            PetscInt numBcs = bcNodes.shape[0]
+            PetscInt numSubSpaces
+            PetscInt numBcs
             PetscInt *cnodesPerCell = NULL
             const PetscInt **ccellNodeMaps = NULL
             PETSc.PetscSection* csections = NULL
@@ -104,9 +105,14 @@ cdef class PC(PETSc.PC):
             numpy.ndarray[PetscInt, ndim=2, mode="c"] tmp
 
 
-        CHKERR( PetscMalloc1(numSubSpaces, &ccellNodeMaps) )
+        numSubSpaces = asInt(bs.shape[0])
+        numBcs = asInt(bcNodes.shape[0])
+
+        printf("numSubSpaces: %d\n", numSubSpaces);
+
         CHKERR( PetscMalloc1(numSubSpaces, &cnodesPerCell) )
         CHKERR( PetscMalloc1(numSubSpaces, &csections) )
+        CHKERR( PetscMalloc1(numSubSpaces, &ccellNodeMaps) )
 
         for i from 0 <= i < numSubSpaces:
             tmp = <numpy.ndarray?>(cellNodeMaps[i])

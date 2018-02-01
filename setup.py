@@ -42,4 +42,5 @@ setup(name='ssc',
                              include_dirs=include_dirs,
                              extra_link_args=["-L" + link_dir] +
                              ["-Wl,-rpath," + link_dir],
+                             extra_compile_args=["-ggdb3", "-O0"],
                              libraries=["ssc"])])
