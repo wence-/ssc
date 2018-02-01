@@ -96,103 +96,111 @@ def matrix_funptr(form):
     test, trial = map(operator.methodcaller("function_space"), form.arguments())
     if test != trial:
         raise NotImplementedError("Only for matching test and trial spaces")
+    if len(test) != 1:
+        raise NotImplementedError("Not for mixed spaces")
     kernels = compile_form(form, "subspace_form")
+    if len(kernels) != 1:
+        raise NotImplementedError("Only for single integral")
+    kernel = kernels[0]
+    kinfo = kernel.kinfo
+    if kinfo.subdomain_id != "otherwise":
+        raise NotImplementedError("Only for full domain integrals")
+    if kinfo.integral_type != "cell":
+        raise NotImplementedError("Only for cell integrals")
 
-    funptrs = []
-    kinfos  = []
-    for kernel in kernels:
-        (i, j) = kernel.indices
-        kinfo = kernel.kinfo
-        if kinfo.subdomain_id != "otherwise":
-            raise NotImplementedError("Only for full domain integrals")
-        if kinfo.integral_type != "cell":
-            raise NotImplementedError("Only for cell integrals")
+    # OK, now we've validated the kernel, let's build the callback
+    args = []
 
-        # OK, now we've validated the kernel, let's build the callback
-        args = []
+    mat = DenseMat(test.dof_dset, trial.dof_dset)
 
-        mat = DenseMat(test[i].dof_dset, trial[j].dof_dset)
+    arg = mat(op2.INC, (test.cell_node_map()[op2.i[0]],
+                        trial.cell_node_map()[op2.i[1]]))
+    arg.position = 0
+    args.append(arg)
 
-        arg = mat(op2.INC, (test[i].cell_node_map()[op2.i[0]],
-                            trial[j].cell_node_map()[op2.i[1]]))
-        arg.position = 0
-        args.append(arg)
+    mesh = form.ufl_domains()[kinfo.domain_number]
+    arg = mesh.coordinates.dat(op2.READ, mesh.coordinates.cell_node_map()[op2.i[0]])
+    arg.position = 1
+    args.append(arg)
+    for n in kinfo.coefficient_map:
+        c = form.coefficients()[n]
+        for (i, c_) in enumerate(c.split()):
+            map_ = c.cell_node_map()
+            if map_ is not None:
+                map_ = map_.split[i]
+                map_ = map_[op2.i[0]]
+            arg = c_.dat(op2.READ, map_)
+            arg.position = len(args)
+            args.append(arg)
 
-        mesh = form.ufl_domains()[kinfo.domain_number]
-        arg = mesh.coordinates.dat(op2.READ, mesh.coordinates.cell_node_map()[op2.i[0]])
-        arg.position = 1
-        args.append(arg)
-        for n in kinfo.coefficient_map:
-            c = form.coefficients()[n]
-            for (i, c_) in enumerate(c.split()):
-                map_ = c.cell_node_map()
-                if map_ is not None:
-                    map_ = map_.split[i]
-                    map_ = map_[op2.i[0]]
-                arg = c_.dat(op2.READ, map_)
-                arg.position = len(args)
-                args.append(arg)
+    iterset = op2.Subset(mesh.cell_set, [0])
+    mod = JITModule(kinfo.kernel, iterset, *args)
+    return mod._fun, kinfo
 
-        iterset = op2.Subset(mesh.cell_set, [0])
-        mod = JITModule(kinfo.kernel, iterset, *args)
+def bcdofs(bc):
+    # Return the global dofs fixed by a DirichletBC
+    # in the numbering given by concatenation of all the
+    # subspaces of a mixed function space
+    Z = bc.function_space()
+    while Z.parent is not None:
+        Z = Z.parent
 
-        funptrs.append(mod._fun)
-        kinfos.append(kinfo)
+    indices = bc._indices
+    offset = 0
 
-    return funptrs, kinfos
+    for (i, idx) in enumerate(indices):
+        if isinstance(Z.ufl_element(), VectorElement):
+            offset += idx
+            assert i == len(indices)-1 # assert we're at the end of the chain
+            assert Z.sub(idx).value_size == 1
+        elif isinstance(Z.ufl_element(), MixedElement):
+            offset += sum(Z.sub(j).dim() for j in range(idx))
+        else:
+            raise NotImplementedError("How are you taking a .sub?")
 
+        Z = Z.sub(idx)
+
+    bs = Z.value_size
+    out = []
+    for node in bc.nodes:
+        for j in range(bs):
+            out.append(node*bs + j + offset)
+    return out
 
 def setup_patch_pc(patch, J, bcs):
     patch = PatchPC.PC.cast(patch)
-    funptrs, kinfos = matrix_funptr(J)
+    funptr, kinfo = matrix_funptr(J)
     V, _ = map(operator.methodcaller("function_space"), J.arguments())
     mesh = V.ufl_domain()
 
     if len(bcs) > 0:
-        bc_nodes = numpy.unique(numpy.concatenate([b.nodes for b in bcs]))
+        bc_nodes = numpy.array(sum((bcdofs(bc) for bc in bcs), []))
     else:
         bc_nodes = numpy.empty(0, dtype=numpy.int32)
 
-    op_coeffs_list = []
-    op_args_list   = []
+    op_coeffs = [mesh.coordinates]
+    for n in kinfo.coefficient_map:
+        op_coeffs.append(J.coefficients()[n])
 
-    for kinfo in kinfos:
-        op_coeffs = [mesh.coordinates]
-        for n in kinfo.coefficient_map:
-            op_coeffs.append(J.coefficients()[n])
-
-        op_args = []
-        for c in op_coeffs:
-            for c_ in c.split():
-                op_args.append(c_.dat._data.ctypes.data)
-                c_map = c_.cell_node_map()
-                if c_map is not None:
-                    op_args.append(c_map._values.ctypes.data)
-
-        op_coeffs_list.append(op_coeffs)
-        op_args_list.append(op_args)
+    op_args = []
+    for c in op_coeffs:
+        for c_ in c.split():
+            op_args.append(c_.dat._data.ctypes.data)
+            c_map = c_.cell_node_map()
+            if c_map is not None:
+                op_args.append(c_map._values.ctypes.data)
 
     def op(pc, mat, ncell, cells, cell_dofmap):
-        for (i, funptr) in enumerate(funptrs):
-            funptr(0, ncell, cells, mat.handle,
-                   cell_dofmap, cell_dofmap, *op_args_list[i])
+        funptr(0, ncell, cells, mat.handle,
+               cell_dofmap, cell_dofmap, *op_args)
         mat.assemble()
     patch.setPatchDMPlex(mesh._plex)
     patch.setPatchDefaultSF(V.dm.getDefaultSF())
     patch.setPatchCellNumbering(mesh._cell_numbering)
-
-    bc_node_list = []
-    for W in V:
-        applicable_bcs = [b for b in bcs if b.function_space() == W]
-        if len(applicable_bcs) > 0:
-            bc_nodes = numpy.unique(numpy.concatenate([b.nodes for b in applicable_bcs]))
-        else:
-            bc_nodes = numpy.empty(0, dtype=numpy.int32)
-        bc_node_list.append(bc_nodes)
-
     patch.setPatchDiscretisationInfo([W.dm.getDefaultSection() for W in V],
                                      [W.value_size for W in V],
                                      [W.cell_node_list for W in V],
-                                     bc_node_list)
+                                     numpy.cumsum([W.dim() for W in V]),
+                                     bc_nodes)
     patch.setPatchComputeOperator(op)
     return patch
