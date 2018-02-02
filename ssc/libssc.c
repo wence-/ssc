@@ -579,7 +579,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
                 for ( PetscInt j = 0; j < dofsPerCell; j++ ) {
                     for ( PetscInt l = 0; l < bs; l++ ) {
                         const PetscInt globalDof = cellNodeMap[cell*dofsPerCell + j] + subspaceOffset + l;
-                        const PetscInt localDof = dofsArray[i*dofsPerCell + j + l];
+                        const PetscInt localDof = dofsArray[bs*(i*dofsPerCell + j) + l];
                         PetscHashIAdd(ht, globalDof, localDof);
                     }
                 }
