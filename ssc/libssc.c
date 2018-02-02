@@ -59,7 +59,7 @@ typedef struct {
     PetscInt        *bs;            /* block size (can come from global
                                     * operators?) */
     PetscInt        *nodesPerCell;
-    PetscInt         totalNodesPerCell;
+    PetscInt         totalDofsPerCell;
     const PetscInt **cellNodeMap; /* Map from cells to nodes */
 
     KSP             *ksp;        /* Solvers for each patch */
@@ -168,13 +168,13 @@ PETSC_EXTERN PetscErrorCode PCPatchSetDiscretisationInfo(PC pc, PetscInt nsubspa
     ierr = PetscMalloc1(nsubspaces+1, &patch->subspaceOffsets); CHKERRQ(ierr);
 
     patch->nsubspaces = nsubspaces;
-    patch->totalNodesPerCell = 0;
+    patch->totalDofsPerCell = 0;
     for (int i = 0; i < nsubspaces; i++) {
         patch->dofSection[i] = dofSection[i];
         ierr = PetscObjectReference((PetscObject)dofSection[i]); CHKERRQ(ierr);
         patch->bs[i] = bs[i];
         patch->nodesPerCell[i] = nodesPerCell[i];
-        patch->totalNodesPerCell += nodesPerCell[i];
+        patch->totalDofsPerCell += nodesPerCell[i]*bs[i];
         patch->cellNodeMap[i] = cellNodeMap[i];
         patch->subspaceOffsets[i] = subspaceOffsets[i];
     }
@@ -476,7 +476,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
     PetscInt        numCells;
     PetscInt        numDofs;
     PetscInt        numGlobalDofs;
-    PetscInt        totalDofsPerCell = patch->totalNodesPerCell;
+    PetscInt        totalDofsPerCell = patch->totalDofsPerCell;
     PetscInt        vStart, vEnd;
     const PetscInt *cellsArray;
     PetscInt       *newCellsArray   = NULL;
@@ -546,6 +546,11 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
         PetscHashISize(ht, dof);
         /* How many local dofs in this patch? */
         ierr = PetscSectionSetDof(gtolCounts, v, dof); CHKERRQ(ierr);
+    }
+    if (globalIndex != numDofs) {
+        SETERRQ2(PETSC_COMM_SELF, PETSC_ERR_ARG_OUTOFRANGE,
+                 "Expected number of dofs (%d) doesn't match found number (%d)",
+                 numDofs, globalIndex);
     }
     ierr = PetscSectionSetUp(gtolCounts); CHKERRQ(ierr);
     ierr = PetscSectionGetStorageSize(gtolCounts, &numGlobalDofs); CHKERRQ(ierr);
@@ -905,7 +910,7 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, Mat multMat, PetscI
     ierr = PetscSectionGetDof(patch->cellCounts, which, &ncell); CHKERRQ(ierr);
     ierr = PetscSectionGetOffset(patch->cellCounts, which, &offset); CHKERRQ(ierr);
     PetscStackPush("PCPatch user callback");
-    ierr = patch->usercomputeop(pc, mat, ncell, cellsArray + offset, ncell*patch->totalNodesPerCell, dofsArray + offset*patch->totalNodesPerCell, patch->usercomputectx); CHKERRQ(ierr);
+    ierr = patch->usercomputeop(pc, mat, ncell, cellsArray + offset, ncell*patch->totalDofsPerCell, dofsArray + offset*patch->totalDofsPerCell, patch->usercomputectx); CHKERRQ(ierr);
     PetscStackPop;
     ierr = ISRestoreIndices(patch->dofs, &dofsArray); CHKERRQ(ierr);
     ierr = ISRestoreIndices(patch->cells, &cellsArray); CHKERRQ(ierr);
@@ -1121,7 +1126,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
     for ( PetscInt i = 0; i < patch->npatch; i++ ) {
         PetscInt start, len;
-        Mat multMat;
+        Mat multMat = NULL;
 
         ierr = PetscSectionGetDof(patch->gtolCounts, i + pStart, &len); CHKERRQ(ierr);
         ierr = PetscSectionGetOffset(patch->gtolCounts, i + pStart, &start); CHKERRQ(ierr);
