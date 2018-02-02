@@ -874,8 +874,8 @@ static PetscErrorCode PCPatchCreateMatrix(PC pc, Vec x, Vec y, Mat *mat)
     ierr = VecGetBlockSize(y, &rbs); CHKERRQ(ierr);
     ierr = MatCreate(PETSC_COMM_SELF, mat); CHKERRQ(ierr);
     ierr = PCGetOptionsPrefix(pc, &prefix); CHKERRQ(ierr);
-    ierr = MatSetOptionsPrefix(mat, prefix); CHKERRQ(ierr);
-    ierr = MatAppendOptionsPrefix(mat, "sub_"); CHKERRQ(ierr);
+    ierr = MatSetOptionsPrefix(*mat, prefix); CHKERRQ(ierr);
+    ierr = MatAppendOptionsPrefix(*mat, "sub_"); CHKERRQ(ierr);
     if (patch->sub_mat_type) {
         ierr = MatSetType(*mat, patch->sub_mat_type); CHKERRQ(ierr);
     }
