@@ -5,12 +5,12 @@ from libc.stdint cimport uintptr_t
 from libc.stdio cimport printf
 
 cdef extern from "petsc.h" nogil:
-    int PetscMalloc1(PetscInt, void*)
-    int PetscFree(void*)
     ctypedef long PetscInt
     ctypedef double PetscScalar
     ctypedef enum PetscBool:
         PETSC_TRUE, PETSC_FALSE
+    int PetscMalloc1(PetscInt, void*)
+    int PetscFree(void*)
 
 cdef extern from "libssc.h" nogil:
     int PCPatchSetDMPlex(PETSc.PetscPC, PETSc.PetscDM)
@@ -108,8 +108,6 @@ cdef class PC(PETSc.PC):
         numSubSpaces = asInt(bs.shape[0])
         numBcs = asInt(bcNodes.shape[0])
 
-        printf("numSubSpaces: %d\n", numSubSpaces);
-
         CHKERR( PetscMalloc1(numSubSpaces, &cnodesPerCell) )
         CHKERR( PetscMalloc1(numSubSpaces, &csections) )
         CHKERR( PetscMalloc1(numSubSpaces, &ccellNodeMaps) )
@@ -118,7 +116,7 @@ cdef class PC(PETSc.PC):
             tmp = <numpy.ndarray?>(cellNodeMaps[i])
             ccellNodeMaps[i] = <PetscInt *> tmp.data
             cnodesPerCell[i] = cellNodeMaps[i].shape[1]
-            csections[i] = <PETSc.PetscSection> dofSections[i].sec
+            csections[i] = (<PETSc.Section?>dofSections[i]).sec
 
         CHKERR( PCPatchSetDiscretisationInfo(self.pc, numSubSpaces,
                                              csections,
