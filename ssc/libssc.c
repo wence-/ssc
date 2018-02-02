@@ -1206,9 +1206,9 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
      * combination right now.  If one wanted multiplicative, the
      * scatter/gather stuff would have to be reworked a bit. */
     ierr = VecSet(y, 0.0); CHKERRQ(ierr);
+    ierr = VecGetArray(y, &globalY); CHKERRQ(ierr);
     /* PEF: replace with VecCopy for now */
     /* ierr = VecGetArrayRead(patch->localY, (const PetscScalar **)&localY); CHKERRQ(ierr);
-    ierr = VecGetArray(y, &globalY); CHKERRQ(ierr);
     ierr = PetscSFReduceBegin(patch->defaultSF, patch->data_type, localY, globalY, MPI_SUM); CHKERRQ(ierr);
     ierr = PetscSFReduceEnd(patch->defaultSF, patch->data_type, localY, globalY, MPI_SUM); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(patch->localY, (const PetscScalar **)&localY); CHKERRQ(ierr); */
