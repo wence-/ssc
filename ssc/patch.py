@@ -52,7 +52,7 @@ class MatArg(seq.Arg):
         rdim = rbs * nrows
         addto_name = buf_name
         addto = 'MatSetValues'
-        if self.data._is_vector_field:
+        if self.data._is_vector_field and False:
             addto = 'MatSetValuesBlocked'
             rmap, cmap = maps
             rdim, cdim = self.data.dims[i][j]
