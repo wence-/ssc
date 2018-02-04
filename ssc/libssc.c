@@ -721,7 +721,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
                             for ( PetscInt l = 0; l < bs; l++ ) {
                                 PetscInt localDof;
                                 PetscInt key = bs*j + l;
-                                //PetscInt key = j;
                                 PetscHashIMap(patchDofs, key, localDof);
                                 printf("Patch %d adding (global, local) (%d, %d) to artificial BCs.\n", v - vStart, key, localDof);
                                 if ( localDof == -1 ) {
@@ -907,6 +906,7 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, Mat multMat, PetscI
     const PetscInt *dofsArray;
     const PetscInt *cellsArray;
     PetscInt        ncell, offset, pStart, pEnd;
+    PetscInt i = which;
 
     PetscFunctionBegin;
 
@@ -926,11 +926,27 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, Mat multMat, PetscI
     ierr = PetscSectionGetDof(patch->cellCounts, which, &ncell); CHKERRQ(ierr);
     ierr = PetscSectionGetOffset(patch->cellCounts, which, &offset); CHKERRQ(ierr);
     PetscStackPush("PCPatch user callback");
+    if (4 == i) {
+        printf("cells: ");
+        for (PetscInt cellj = 0; cellj < ncell; cellj++) {
+            printf(" %d", (cellsArray+offset)[cellj]);
+        }
+        printf("\ndofs: ");
+        for (PetscInt dofj = 0; dofj < ncell*patch->totalDofsPerCell; dofj++) {
+            printf(" %d", (dofsArray + offset*patch->totalDofsPerCell)[dofj]);
+        }
+        printf("\n");
+    }
     ierr = patch->usercomputeop(pc, mat, ncell, cellsArray + offset, ncell*patch->totalDofsPerCell, dofsArray + offset*patch->totalDofsPerCell, patch->usercomputectx); CHKERRQ(ierr);
     PetscStackPop;
     ierr = ISRestoreIndices(patch->dofs, &dofsArray); CHKERRQ(ierr);
     ierr = ISRestoreIndices(patch->cells, &cellsArray); CHKERRQ(ierr);
 
+    if (4 == i) {
+      // View the matrix here for patch 4, the patch in the centre
+      printf("Matrix of patch %d before any BCs:\n", i);
+      ierr = MatView(mat, PETSC_VIEWER_STDOUT_SELF); CHKERRQ(ierr);
+    }
     /* Apply boundary conditions.  Could also do this through the local_to_patch guy. */
     if (patch->multiplicative) {
         ierr = MatCopy(mat, multMat, SAME_NONZERO_PATTERN); CHKERRQ(ierr);
@@ -1183,7 +1199,17 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
         }
 
         ierr = PetscLogEventBegin(PC_Patch_Solve, pc, 0, 0, 0); CHKERRQ(ierr);
+        if (4 == i) {
+          // View the matrix here for patch 4, the patch in the centre
+          printf("RHS of patch %d:\n", i);
+          ierr = VecView(patch->patchX[i], PETSC_VIEWER_STDOUT_SELF); CHKERRQ(ierr);
+        }
         ierr = KSPSolve(patch->ksp[i], patch->patchX[i], patch->patchY[i]); CHKERRQ(ierr);
+        if (4 == i) {
+          // View the matrix here for patch 4, the patch in the centre
+          printf("Solution of patch %d:\n", i);
+          ierr = VecView(patch->patchY[i], PETSC_VIEWER_STDOUT_SELF); CHKERRQ(ierr);
+        }
         ierr = PetscLogEventEnd(PC_Patch_Solve, pc, 0, 0, 0); CHKERRQ(ierr);
         if (!patch->save_operators) {
             PC pc;
