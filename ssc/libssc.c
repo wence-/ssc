@@ -539,6 +539,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
                                     "Found more dofs than expected");
                         }
                         /* And store. */
+                        printf("Storing dofsArray[%d] = %d\n", globalIndex, localDof);
                         dofsArray[globalIndex++] = localDof;
                     }
                 }
@@ -560,6 +561,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
 
     /* Now populate the global to local map.  This could be merged
     * into the above loop if we were willing to deal with reallocs. */
+    PetscInt key = 0;
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
         PetscInt       dof, off;
         PetscHashIIter hi;
@@ -572,6 +574,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
             PetscInt subspaceOffset = patch->subspaceOffsets[k];
             const PetscInt *cellNodeMap = patch->cellNodeMap[k];
             PetscInt bs = patch->bs[k];
+            printf("Considering subspace k = %d\n", k);
 
             for ( PetscInt i = off; i < off + dof; i++ ) {
                 /* Reconstruct mapping of global-to-local on this patch. */
@@ -581,7 +584,10 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
                 for ( PetscInt j = 0; j < nodesPerCell; j++ ) {
                     for ( PetscInt l = 0; l < bs; l++ ) {
                         const PetscInt globalDof = cellNodeMap[cell*nodesPerCell + j]*bs + subspaceOffset + l;
-                        const PetscInt localDof = dofsArray[bs*(i*nodesPerCell + j) + l];
+                        const PetscInt localDof = dofsArray[key];
+                        printf("Reading dofsArray[%d] = %d.\n", key, localDof);
+                        key += 1;
+
                         printf("Patch %d: mapping global %d -> local %d\n", v-vStart, globalDof, localDof);
                         PetscHashIAdd(ht, globalDof, localDof);
                     }
