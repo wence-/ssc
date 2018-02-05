@@ -481,6 +481,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
     const PetscInt *cellsArray;
     PetscInt       *newCellsArray   = NULL;
     PetscInt       *dofsArray       = NULL;
+    PetscInt       *asmArray        = NULL;
     PetscInt       *globalDofsArray = NULL;
     PetscInt        globalIndex     = 0;
     PetscHashI      ht;
@@ -490,6 +491,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
     ierr = PetscSectionGetStorageSize(cellCounts, &numCells); CHKERRQ(ierr);
     numDofs = numCells * totalDofsPerCell;
     ierr = PetscMalloc1(numDofs, &dofsArray); CHKERRQ(ierr);
+    ierr = PetscMalloc1(numDofs, &asmArray); CHKERRQ(ierr);
     ierr = PetscMalloc1(numCells, &newCellsArray); CHKERRQ(ierr);
     ierr = PetscSectionGetChart(cellCounts, &vStart, &vEnd); CHKERRQ(ierr);
     ierr = PetscSectionCreate(PETSC_COMM_SELF, &patch->gtolCounts); CHKERRQ(ierr);
@@ -562,6 +564,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
     /* Now populate the global to local map.  This could be merged
     * into the above loop if we were willing to deal with reallocs. */
     PetscInt key = 0;
+    PetscInt asmKey = 0;
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
         PetscInt       dof, off;
         PetscHashIIter hi;
@@ -608,14 +611,53 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
                 }
             }
         }
+
+        /* At this point, we have a hash table ht built that maps globalDof -> localDof.
+           We need to create the dof table laid out cellwise first, then by subspace,
+           as the assembler assembles cell-wise and we need to stuff the different
+           contributions of the different function spaces to the right places. So we loop
+           over cells, then over subspaces. */
+
+        if (patch->nsubspaces > 1) { /* for nsubspaces = 1, data we need is already in dofsArray */
+            for (PetscInt i = off; i < off + dof; i++ ) {
+                const PetscInt c = cellsArray[i];
+                PetscInt cell;
+                ierr = PetscSectionGetOffset(cellNumbering, c, &cell); CHKERRQ(ierr);
+
+                for ( PetscInt k = 0; k < patch->nsubspaces; k++ ) {
+                    PetscInt nodesPerCell = patch->nodesPerCell[k];
+                    PetscInt subspaceOffset = patch->subspaceOffsets[k];
+                    const PetscInt *cellNodeMap = patch->cellNodeMap[k];
+                    PetscInt bs = patch->bs[k];
+                    for ( PetscInt j = 0; j < nodesPerCell; j++ ) {
+                        for ( PetscInt l = 0; l < bs; l++ ) {
+                            const PetscInt globalDof = cellNodeMap[cell*nodesPerCell + j]*bs + subspaceOffset + l;
+                            PetscInt localDof;
+                            PetscHashIMap(ht, globalDof, localDof);
+                            asmArray[asmKey++] = localDof;
+                        }
+                    }
+                }
+            }
+        }
     }
+
+    if (1 == patch->nsubspaces) { /* replace with memcpy? */
+        for (PetscInt i = 0; i < numDofs; i++) {
+            asmArray[i] = dofsArray[i];
+        }
+    }
+
+
     PetscHashIDestroy(ht);
     ierr = ISRestoreIndices(cells, &cellsArray);
+    ierr = PetscFree(dofsArray); CHKERRQ(ierr);
 
     /* Replace cell indices with firedrake-numbered ones. */
     ierr = ISGeneralSetIndices(cells, numCells, (const PetscInt *)newCellsArray, PETSC_OWN_POINTER); CHKERRQ(ierr);
     ierr = ISCreateGeneral(PETSC_COMM_SELF, numGlobalDofs, globalDofsArray, PETSC_OWN_POINTER, &patch->gtol); CHKERRQ(ierr);
-    ierr = ISCreateGeneral(PETSC_COMM_SELF, numDofs, dofsArray, PETSC_OWN_POINTER, &patch->dofs); CHKERRQ(ierr);
+    ierr = ISCreateGeneral(PETSC_COMM_SELF, numDofs, asmArray, PETSC_OWN_POINTER, &patch->dofs); CHKERRQ(ierr);
+
     PetscFunctionReturn(0);
 }
 
