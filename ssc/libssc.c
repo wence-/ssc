@@ -589,13 +589,14 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
             }
             if (dof > 0) {
                 /* Shove it in the output data structure. */
-                ierr = PetscSectionGetOffset(gtolCounts, v, &off); CHKERRQ(ierr);
+                PetscInt goff;
+                ierr = PetscSectionGetOffset(gtolCounts, v, &goff); CHKERRQ(ierr);
                 PetscHashIIterBegin(ht, hi);
                 while (!PetscHashIIterAtEnd(ht, hi)) {
                     PetscInt globalDof, localDof;
                     PetscHashIIterGetKeyVal(ht, hi, globalDof, localDof);
                     if (globalDof >= 0) {
-                        globalDofsArray[off + localDof] = globalDof;
+                        globalDofsArray[goff + localDof] = globalDof;
                     }
                     PetscHashIIterNext(ht, hi);
                 }
