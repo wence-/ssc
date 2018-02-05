@@ -3,23 +3,22 @@ import numpy
 import operator
 
 from firedrake.petsc import PETSc
+from firedrake import VectorElement, MixedElement
 
 from pyop2 import op2
 from pyop2 import base as pyop2
 from pyop2 import sequential as seq
+from pyop2.datatypes import IntType
 
 from ssc import PatchPC
 
 
 class DenseSparsity(object):
     def __init__(self, rset, cset):
-        if isinstance(rset, op2.MixedDataSet) or \
-           isinstance(cset, op2.MixedDataSet):
-            raise NotImplementedError("Not implemented for mixed sparsities")
         self.shape = (1, 1)
         self._nrows = rset.size
         self._ncols = cset.size
-        self._dims = (((rset.cdim, cset.cdim), ), )
+        self._dims = (((1, 1), ), )
         self.dims = self._dims
         self.dsets = rset, cset
 
@@ -33,38 +32,29 @@ class MatArg(seq.Arg):
         # Override global c_addto to index the map locally rather than globally.
         # Replaces MatSetValuesLocal with MatSetValues
         from pyop2.utils import as_tuple
-        maps = as_tuple(self.map, op2.Map)
-        nrows = maps[0].split[i].arity
-        ncols = maps[1].split[j].arity
+        rmap, cmap = as_tuple(self.map, op2.Map)
+        rset, cset = self.data.sparsity.dsets
+        nrows = sum(m.arity*s.cdim for m, s in zip(rmap, rset))
+        ncols = sum(m.arity*s.cdim for m, s in zip(cmap, cset))
         rows_str = "%s + n * %s" % (self.c_map_name(0, i), nrows)
         cols_str = "%s + n * %s" % (self.c_map_name(1, j), ncols)
 
         if extruded is not None:
-            rows_str = extruded + self.c_map_name(0, i)
-            cols_str = extruded + self.c_map_name(1, j)
+            raise NotImplementedError("Not for extruded right now")
 
         if is_facet:
-            nrows *= 2
-            ncols *= 2
+            raise NotImplementedError("Not for interior facets and extruded")
 
         ret = []
-        rbs, cbs = self.data.sparsity[i, j].dims[0][0]
-        rdim = rbs * nrows
         addto_name = buf_name
-        addto = 'MatSetValues'
-        if self.data._is_vector_field and False:
-            addto = 'MatSetValuesBlocked'
-            rmap, cmap = maps
-            rdim, cdim = self.data.dims[i][j]
-            if rmap.vector_index is not None or cmap.vector_index is not None:
-                raise NotImplementedError
-        ret.append("""%(addto)s(%(mat)s, %(nrows)s, %(rows)s,
+        if rmap.vector_index is not None or cmap.vector_index is not None:
+            raise NotImplementedError
+        ret.append("""MatSetValues(%(mat)s, %(nrows)s, %(rows)s,
                                          %(ncols)s, %(cols)s,
                                          (const PetscScalar *)%(vals)s,
                                          %(insert)s);""" %
                    {'mat': self.c_arg_name(i, j),
                     'vals': addto_name,
-                    'addto': addto,
                     'nrows': nrows,
                     'ncols': ncols,
                     'rows': rows_str,
@@ -74,8 +64,8 @@ class MatArg(seq.Arg):
 
 
 class DenseMat(pyop2.Mat):
-    def __init__(self, rset, cset):
-        self._sparsity = DenseSparsity(rset, cset)
+    def __init__(self, dset):
+        self._sparsity = DenseSparsity(dset, dset)
         self.dtype = numpy.dtype(PETSc.ScalarType)
 
     def __call__(self, access, path):
@@ -92,17 +82,22 @@ class JITModule(seq.JITModule):
 
 
 def matrix_funptr(form):
-    from firedrake.tsfc_interface import compile_form
+    from tsfc import compile_form
+    from firedrake.tsfc_interface import KernelInfo, Kernel
     test, trial = map(operator.methodcaller("function_space"), form.arguments())
     if test != trial:
         raise NotImplementedError("Only for matching test and trial spaces")
-    if len(test) != 1:
-        raise NotImplementedError("Not for mixed spaces")
-    kernels = compile_form(form, "subspace_form")
-    if len(kernels) != 1:
-        raise NotImplementedError("Only for single integral")
-    kernel = kernels[0]
-    kinfo = kernel.kinfo
+    kernel, = compile_form(form, prefix="subspace_form")
+
+    kinfo = KernelInfo(kernel=Kernel(kernel.ast, kernel.ast.name),
+                       integral_type=kernel.integral_type,
+                       oriented=kernel.oriented,
+                       subdomain_id=kernel.subdomain_id,
+                       domain_number=kernel.domain_number,
+                       coefficient_map=kernel.coefficient_numbers,
+                       needs_cell_facets=False,
+                       pass_layer_arg=False)
+
     if kinfo.subdomain_id != "otherwise":
         raise NotImplementedError("Only for full domain integrals")
     if kinfo.integral_type != "cell":
@@ -111,10 +106,19 @@ def matrix_funptr(form):
     # OK, now we've validated the kernel, let's build the callback
     args = []
 
-    mat = DenseMat(test.dof_dset, trial.dof_dset)
+    toset = op2.Set(1)
+    dofset = op2.DataSet(toset, 1)
+    arity = sum(m.arity*s.cdim
+                for m, s in zip(test.cell_node_map(),
+                                test.dof_dset))
+    iterset = test.cell_node_map().iterset
+    cell_node_map = op2.Map(iterset,
+                            toset, arity,
+                            values=numpy.zeros(iterset.total_size*arity, dtype=IntType))
+    mat = DenseMat(dofset)
 
-    arg = mat(op2.INC, (test.cell_node_map()[op2.i[0]],
-                        trial.cell_node_map()[op2.i[1]]))
+    arg = mat(op2.INC, (cell_node_map[op2.i[0]],
+                        cell_node_map[op2.i[1]]))
     arg.position = 0
     args.append(arg)
 
@@ -125,9 +129,8 @@ def matrix_funptr(form):
     for n in kinfo.coefficient_map:
         c = form.coefficients()[n]
         for (i, c_) in enumerate(c.split()):
-            map_ = c.cell_node_map()
+            map_ = c_.cell_node_map()
             if map_ is not None:
-                map_ = map_.split[i]
                 map_ = map_[op2.i[0]]
             arg = c_.dat(op2.READ, map_)
             arg.position = len(args)
@@ -136,6 +139,7 @@ def matrix_funptr(form):
     iterset = op2.Subset(mesh.cell_set, [0])
     mod = JITModule(kinfo.kernel, iterset, *args)
     return mod._fun, kinfo
+
 
 def bcdofs(bc):
     # Return the global dofs fixed by a DirichletBC
