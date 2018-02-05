@@ -761,6 +761,7 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
                 for ( PetscInt k = 0; k < patch->nsubspaces; k++ ) {
                     PetscSection dofSection = patch->dofSection[k];
                     PetscInt bs = patch->bs[k];
+                    PetscInt subspaceOffset = patch->subspaceOffsets[k];
 
                     ierr = PetscSectionGetDof(dofSection, p, &ldof); CHKERRQ(ierr);
                     ierr = PetscSectionGetOffset(dofSection, p, &loff); CHKERRQ(ierr);
@@ -769,7 +770,7 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
                         for ( PetscInt j = loff; j < ldof + loff; j++ ) {
                             for ( PetscInt l = 0; l < bs; l++ ) {
                                 PetscInt localDof;
-                                PetscInt key = bs*j + l;
+                                PetscInt key = bs*j + l + subspaceOffset;
                                 PetscHashIMap(patchDofs, key, localDof);
                                 printf("Patch %d adding (global, local) (%d, %d) to artificial BCs.\n", v - vStart, key, localDof);
                                 if ( localDof == -1 ) {
