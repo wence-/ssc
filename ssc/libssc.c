@@ -1273,6 +1273,8 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
         ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
                                             patch->patchY[i], patch->localY,
                                             ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
+        printf("patch->localY after solve %d.\n", i);
+        ierr = VecView(patch->localY, PETSC_VIEWER_STDOUT_WORLD);
 
         /* Get the matrix on the patch but with only global bcs applied.
          * This matrix is then multiplied with the result from the previous solve
@@ -1295,13 +1297,15 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
      * combination right now.  If one wanted multiplicative, the
      * scatter/gather stuff would have to be reworked a bit. */
     ierr = VecSet(y, 0.0); CHKERRQ(ierr);
-    ierr = VecGetArray(y, &globalY); CHKERRQ(ierr);
     /* PEF: replace with VecCopy for now */
+    printf("patch->localY:\n");
+    ierr = VecView(patch->localY, PETSC_VIEWER_STDOUT_WORLD); CHKERRQ(ierr);
+    ierr = VecCopy(patch->localY, y); CHKERRQ(ierr);
+    ierr = VecGetArray(y, &globalY); CHKERRQ(ierr);
     /* ierr = VecGetArrayRead(patch->localY, (const PetscScalar **)&localY); CHKERRQ(ierr);
     ierr = PetscSFReduceBegin(patch->defaultSF, patch->data_type, localY, globalY, MPI_SUM); CHKERRQ(ierr);
     ierr = PetscSFReduceEnd(patch->defaultSF, patch->data_type, localY, globalY, MPI_SUM); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(patch->localY, (const PetscScalar **)&localY); CHKERRQ(ierr); */
-    ierr = VecCopy(patch->localY, y); CHKERRQ(ierr);
 
     if (patch->partition_of_unity) {
         ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
@@ -1320,6 +1324,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
             globalY[idx] = globalX[idx];
         }
     }
+
     ierr = ISRestoreIndices(patch->bcNodes, &bcNodes); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
