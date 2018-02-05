@@ -778,7 +778,7 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     ierr = ISDestroy(&patch->dofs); CHKERRQ(ierr);
     ierr = ISDestroy(&patch->bcNodes); CHKERRQ(ierr);
 
-    for (i = 0; i++; i < patch->nsubspaces) {
+    for (i = 0; i < patch->nsubspaces; i++) {
         ierr = PetscSectionDestroy(&patch->dofSection[i]); CHKERRQ(ierr);
     }
     ierr = PetscFree(patch->dofSection); CHKERRQ(ierr);
