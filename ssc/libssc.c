@@ -221,6 +221,47 @@ PETSC_EXTERN PetscErrorCode PCPatchSetComputeOperator(PC pc, PetscErrorCode (*fu
 }
 
 #undef __FUNCT__
+#define __FUNCT__ "PCPatchCompleteCellPatch"
+/* On entry, ht contains the topological entities whose dofs we are responsible for solving for;
+   on exit, cht contains all the topological entities we need to compute their residuals.
+   In full generality this should incorporate knowledge of the sparsity pattern of the matrix;
+   here we assume a standard FE sparsity pattern.*/
+static PetscErrorCode PCPatchCompleteCellPatch(DM dm, PetscHashI ht, PetscHashI cht)
+{
+    PetscErrorCode    ierr;
+    PetscHashIIter    hi;
+    PetscInt          entity;
+    PetscInt          dummy;
+
+    PetscFunctionBegin;
+
+
+    PetscHashIIterBegin(ht, hi);
+    while (!PetscHashIIterAtEnd(ht, hi)) {
+        PetscInt       starSize, closureSize;
+        PetscInt      *star = NULL, *closure = NULL;
+
+        PetscHashIIterGetKeyVal(ht, hi, entity, dummy);
+        PetscHashIIterNext(ht, hi);
+
+        /* Loop over all the cells that this entity connects to */
+        ierr = DMPlexGetTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
+        for ( PetscInt si = 0; si < starSize; si++ ) {
+            PetscInt ownedentity = star[2*si];
+            /* now loop over all entities in the closure of that cell */
+            ierr = DMPlexGetTransitiveClosure(dm, ownedentity, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
+            for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
+                PetscInt seenentity = closure[2*ci];
+                PetscHashIAdd(cht, seenentity, 0);
+            }
+            ierr = DMPlexRestoreTransitiveClosure(dm, ownedentity, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
+        }
+        ierr = DMPlexRestoreTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
+    }
+    PetscFunctionReturn(0);
+}
+
+#undef __FUNCT__
 #define __FUNCT__ "PCPatchCreateCellPatches"
 /*
  * PCPatchCreateCellPatches - create patches of cells around vertices in the mesh.
@@ -245,19 +286,34 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
     PetscInt       *cellsArray = NULL;
     PetscInt        numCells;
     PetscSection    cellCounts;
+    PetscHashI      ht;
+    PetscHashI      cht;
 
     PetscFunctionBegin;
+
+    /* Used to keep track of the cells in the patch. */
+    PetscHashICreate(ht);
+    PetscHashICreate(cht);
 
     dm = patch->dm;
     if (!dm) {
         SETERRQ(PetscObjectComm((PetscObject)pc), PETSC_ERR_ARG_WRONGSTATE, "DM not yet set on patch PC\n");
     }
     ierr = DMPlexGetChart(dm, &pStart, &pEnd); CHKERRQ(ierr);
-    ierr = DMPlexGetDepthStratum(dm, 0, &vStart, &vEnd); CHKERRQ(ierr);
     ierr = DMPlexGetHeightStratum(dm, 0, &cStart, &cEnd); CHKERRQ(ierr);
 
+    if (patch->codim < 0) { /* codim unset */
+        if (patch->dim < 0) { /* dim unset */
+            ierr = DMPlexGetDepthStratum(dm, 0, &vStart, &vEnd); CHKERRQ(ierr);
+        } else { /* dim set */
+            ierr = DMPlexGetDepthStratum(dm, patch->dim, &vStart, &vEnd); CHKERRQ(ierr);
+        }
+    } else { /* codim set */
+        ierr = DMPlexGetHeightStratum(dm, patch->codim, &vStart, &vEnd); CHKERRQ(ierr);
+    }
+
     /* These labels mark the owned points.  We only create patches
-     * around vertices that this process owns. */
+     * around entites that this process owns. */
     ierr = DMGetLabel(dm, "pyop2_ghost", &ghost); CHKERRQ(ierr);
 
     ierr = DMLabelCreateIndex(ghost, pStart, pEnd); CHKERRQ(ierr);
@@ -266,19 +322,28 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
     cellCounts = patch->cellCounts;
     ierr = PetscSectionSetChart(cellCounts, vStart, vEnd); CHKERRQ(ierr);
 
-    /* Count cells surrounding each vertex */
+    /* Count cells in the patch surrounding each entity */
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
+        PetscHashIIter hi;
+
         ierr = DMLabelHasPoint(ghost, v, &flg); CHKERRQ(ierr);
-        /* Not an owned vertex, don't make a cell patch. */
+        /* Not an owned entity, don't make a cell patch. */
         if (flg) {
             continue;
         }
-        ierr = DMPlexGetTransitiveClosure(dm, v, PETSC_FALSE, &closureSize, &closure); CHKERRQ(ierr);
-        for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
-            const PetscInt c = closure[2*ci];
-            if (cStart <= c && c < cEnd) {
+
+        PetscHashIClear(ht);
+        PetscHashIClear(cht);
+        ierr = patch->patchconstructop(dm, v, ht); CHKERRQ(ierr);
+        ierr = PCPatchCompleteCellPatch(dm, ht, cht);
+        PetscHashIIterBegin(cht, hi);
+        while (!PetscHashIIterAtEnd(cht, hi)) {
+            PetscInt entity, dummy;
+            PetscHashIIterGetKeyVal(cht, hi, entity, dummy);
+            if (cStart <= entity && entity < cEnd) {
                 ierr = PetscSectionAddDof(cellCounts, v, 1); CHKERRQ(ierr);
             }
+            PetscHashIIterNext(cht, hi);
         }
     }
     ierr = DMLabelDestroyIndex(ghost); CHKERRQ(ierr);
@@ -291,28 +356,35 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
      * actually remember the cells. */
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
         PetscInt ndof, off;
+        PetscHashIIter hi;
+
         ierr = PetscSectionGetDof(cellCounts, v, &ndof); CHKERRQ(ierr);
         ierr = PetscSectionGetOffset(cellCounts, v, &off); CHKERRQ(ierr);
         if ( ndof <= 0 ) {
             continue;
         }
-        ierr = DMPlexGetTransitiveClosure(dm, v, PETSC_FALSE, &closureSize, &closure); CHKERRQ(ierr);
+        PetscHashIClear(ht);
+        PetscHashIClear(cht);
+        ierr = patch->patchconstructop(dm, v, ht); CHKERRQ(ierr);
+        ierr = PCPatchCompleteCellPatch(dm, ht, cht);
         ndof = 0;
-        for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
-            const PetscInt c = closure[2*ci];
-            if (cStart <= c && c < cEnd) {
-                cellsArray[ndof + off] = c;
+        PetscHashIIterBegin(cht, hi);
+        while (!PetscHashIIterAtEnd(cht, hi)) {
+            PetscInt entity, dummy;
+            PetscHashIIterGetKeyVal(cht, hi, entity, dummy);
+            if (cStart <= entity && entity < cEnd) {
+                cellsArray[ndof + off] = entity;
                 ndof++;
             }
+            PetscHashIIterNext(cht, hi);
         }
-    }
-    if (closure) {
-        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, &closureSize, &closure); CHKERRQ(ierr);
     }
 
     ierr = ISCreateGeneral(PETSC_COMM_SELF, numCells, cellsArray, PETSC_OWN_POINTER, &patch->cells); CHKERRQ(ierr);
     ierr = PetscSectionGetChart(patch->cellCounts, &pStart, &pEnd); CHKERRQ(ierr);
     patch->npatch = pEnd - pStart;
+    PetscHashIDestroy(ht);
+    PetscHashIDestroy(cht);
     PetscFunctionReturn(0);
 }
 
@@ -1324,7 +1396,7 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(DM dm, PetscInt entity, Pet
 {
     PetscErrorCode ierr;
     PetscInt       starSize, closureSize, fclosureSize;
-    PetscInt      *star, *closure, *fclosure;
+    PetscInt      *star = NULL, *closure = NULL, *fclosure = NULL;
     PetscInt       vStart, vEnd;
     PetscInt       fStart, fEnd;
 
@@ -1360,6 +1432,7 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(DM dm, PetscInt entity, Pet
                         break;
                     }
                 }
+                ierr = DMPlexRestoreTransitiveClosure(dm, newentity, PETSC_TRUE, &fclosureSize, &fclosure); CHKERRQ(ierr);
                 if (should_add) {
                     PetscHashIAdd(ht, newentity, 0);
                 }
@@ -1367,7 +1440,9 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(DM dm, PetscInt entity, Pet
                 PetscHashIAdd(ht, newentity, 0);
             }
         }
+        ierr = DMPlexRestoreTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
     }
+    ierr = DMPlexRestoreTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -1377,7 +1452,7 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(DM dm, PetscInt entity, Petsc
 {
     PetscErrorCode ierr;
     PetscInt       starSize, closureSize;
-    PetscInt      *star, *closure;
+    PetscInt      *star = NULL, *closure = NULL;
 
     PetscFunctionBegin;
 
@@ -1394,7 +1469,9 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(DM dm, PetscInt entity, Petsc
             PetscInt newentity = closure[2*ci];
             PetscHashIAdd(ht, newentity, 0);
         }
+        ierr = DMPlexRestoreTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
     }
+    ierr = DMPlexRestoreTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -1426,7 +1503,7 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
     if (dimflg && codimflg) {
         SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Can only set one of dimension or co-dimension");
     }
-    ierr = PetscOptionsEList("-pc_patch_construction_type", "How should the patches be constructed?", "PCSetFromOptions_PATCH", patchConstructionTypes, sizeof(patchConstructionTypes), patchConstructionTypes[0], &patchConstructionType, &flg);
+    ierr = PetscOptionsEList("-pc_patch_construction_type", "How should the patches be constructed?", "PCSetFromOptions_PATCH", patchConstructionTypes, 2, patchConstructionTypes[0], &patchConstructionType, &flg);
     if (flg) {
         if (patchConstructionType == 0) {
             patch->patchconstructop = PCPatchConstruct_Current;
