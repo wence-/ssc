@@ -71,6 +71,10 @@ typedef struct {
     MatType          sub_mat_type;
     PetscErrorCode  (*usercomputeop)(PC, Mat, PetscInt, const PetscInt *, PetscInt, const PetscInt *, void *);
     void            *usercomputectx;
+
+    PetscErrorCode  (*patchconstructop)(DM, PetscInt, PetscHashI); /* patch construction */
+    PetscInt         codim; /* dimension or codimension of entities to loop over; */
+    PetscInt         dim;   /* only oxne of them can be set */
 } PC_PATCH;
 
 #undef __FUNCT__
@@ -1315,13 +1319,95 @@ static PetscErrorCode PCSetUpOnBlocks_PATCH(PC pc)
 }
 
 #undef __FUNCT__
+#define __FUNCT__ "PCPatchConstruct_Current"
+PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(DM dm, PetscInt entity, PetscHashI ht)
+{
+    PetscErrorCode ierr;
+    PetscInt       starSize, closureSize, fclosureSize;
+    PetscInt      *star, *closure, *fclosure;
+    PetscInt       vStart, vEnd;
+    PetscInt       fStart, fEnd;
+
+    PetscFunctionBegin;
+
+    /* Find out what the facets and vertices are */
+    ierr = DMPlexGetHeightStratum(dm, 1, &fStart, &fEnd); CHKERRQ(ierr);
+    ierr = DMPlexGetDepthStratum(dm,  0, &vStart, &vEnd); CHKERRQ(ierr);
+
+    /* To start with, add the entity we care about */
+    PetscHashIAdd(ht, entity, 0);
+
+    /* Loop over all the cells that this entity connects to */
+    ierr = DMPlexGetTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
+    for ( PetscInt si = 0; si < starSize; si++ ) {
+        PetscInt cell = star[2*si];
+        /* now loop over all entities in the closure of that cell */
+        ierr = DMPlexGetTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
+        for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
+            PetscInt newentity = closure[2*ci];
+
+            if (vStart <= newentity && newentity < vEnd) {
+                /* Is another vertex. Don't want to add. continue */
+                continue;
+            } else if (fStart <= newentity && newentity < fEnd) {
+                /* Is another facet. Need to check if our own vertex is in its closure */
+                PetscBool should_add = PETSC_FALSE;
+                ierr = DMPlexGetTransitiveClosure(dm, newentity, PETSC_TRUE, &fclosureSize, &fclosure); CHKERRQ(ierr);
+                for ( PetscInt fi = 0; fi < fclosureSize; fi++) {
+                    PetscInt fentity = fclosure[2*fi];
+                    if (entity == fentity) {
+                        should_add = PETSC_TRUE;
+                        break;
+                    }
+                }
+                if (should_add) {
+                    PetscHashIAdd(ht, newentity, 0);
+                }
+            } else { /* not a vertex, not a facet, just add */
+                PetscHashIAdd(ht, newentity, 0);
+            }
+        }
+    }
+    PetscFunctionReturn(0);
+}
+
+#undef __FUNCT__
+#define __FUNCT__ "PCPatchConstruct_Vanka"
+PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(DM dm, PetscInt entity, PetscHashI ht)
+{
+    PetscErrorCode ierr;
+    PetscInt       starSize, closureSize;
+    PetscInt      *star, *closure;
+
+    PetscFunctionBegin;
+
+    /* To start with, add the entity we care about */
+    PetscHashIAdd(ht, entity, 0);
+
+    /* Loop over all the cells that this entity connects to */
+    ierr = DMPlexGetTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
+    for ( PetscInt si = 0; si < starSize; si++ ) {
+        PetscInt cell = star[2*si];
+        /* now loop over all entities in the closure of that cell */
+        ierr = DMPlexGetTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
+        for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
+            PetscInt newentity = closure[2*ci];
+            PetscHashIAdd(ht, newentity, 0);
+        }
+    }
+    PetscFunctionReturn(0);
+}
+
+#undef __FUNCT__
 #define __FUNCT__ "PCSetFromOptions_PATCH"
 static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObject, PC pc)
 {
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
     PetscErrorCode  ierr;
-    PetscBool       flg;
+    PetscBool       flg, dimflg, codimflg;
     char            sub_mat_type[256];
+    const char     *patchConstructionTypes[2]  = {"current", "vanka"};
+    PetscInt        patchConstructionType;
 
     PetscFunctionBegin;
     ierr = PetscOptionsHead(PetscOptionsObject, "Vertex-patch Additive Schwarz options"); CHKERRQ(ierr);
@@ -1334,6 +1420,22 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
 
     ierr = PetscOptionsBool("-pc_patch_multiplicative", "Gauss-Seidel instead of Jacobi?",
                             "PCPatchSetMultiplicative", patch->multiplicative, &patch->multiplicative, &flg); CHKERRQ(ierr);
+
+    ierr = PetscOptionsInt("-pc_patch_construction_dim", "What dimension of entity to construct patches by? (0 = vertices)", "PCSetFromOptions_PATCH", patch->dim, &patch->dim, &dimflg);
+    ierr = PetscOptionsInt("-pc_patch_construction_codim", "What co-dimension of entity to construct patches by? (0 = cells)", "PCSetFromOptions_PATCH", patch->codim, &patch->codim, &codimflg);
+    if (dimflg && codimflg) {
+        SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Can only set one of dimension or co-dimension");
+    }
+    ierr = PetscOptionsEList("-pc_patch_construction_type", "How should the patches be constructed?", "PCSetFromOptions_PATCH", patchConstructionTypes, sizeof(patchConstructionTypes), patchConstructionTypes[0], &patchConstructionType, &flg);
+    if (flg) {
+        if (patchConstructionType == 0) {
+            patch->patchconstructop = PCPatchConstruct_Current;
+        } else if (patchConstructionType == 1) {
+            patch->patchconstructop = PCPatchConstruct_Vanka;
+        } else {
+            SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Unknown patch construction type");
+        }
+    }
 
     ierr = PetscOptionsFList("-pc_patch_sub_mat_type", "Matrix type for patch solves", "PCPatchSetSubMatType",MatList, NULL, sub_mat_type, 256, &flg); CHKERRQ(ierr);
     if (flg) {
@@ -1394,7 +1496,6 @@ static PetscErrorCode PCView_PATCH(PC pc, PetscViewer viewer)
     PetscFunctionReturn(0);
 }
 
-
 #undef __FUNCT__
 #define __FUNCT__ "PCCreate_PATCH"
 PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
@@ -1411,6 +1512,9 @@ PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
     patch->save_operators     = PETSC_TRUE;
     patch->partition_of_unity = PETSC_FALSE;
     patch->multiplicative     = PETSC_FALSE;
+    patch->codim              = -1;
+    patch->dim                = -1;
+    patch->patchconstructop   = PCPatchConstruct_Current;
 
     pc->data                 = (void *)patch;
     pc->ops->apply           = PCApply_PATCH;
