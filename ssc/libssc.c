@@ -1379,9 +1379,17 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(DM dm, PetscInt entity, Petsc
     PetscErrorCode ierr;
     PetscInt       starSize, closureSize;
     PetscInt      *star = NULL, *closure = NULL;
+    PetscInt       vStart, vEnd;
+    PetscBool      isVertex;
 
     PetscFunctionBegin;
     PetscHashIClear(ht);
+
+    /* Find out what the vertices are */
+    ierr = DMPlexGetDepthStratum(dm,  0, &vStart, &vEnd); CHKERRQ(ierr);
+
+    /* Are we dealing with a patch around a vertex? */
+    isVertex = (vStart <= entity && entity < vEnd);
 
     /* To start with, add the entity we care about */
     PetscHashIAdd(ht, entity, 0);
@@ -1394,6 +1402,10 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(DM dm, PetscInt entity, Petsc
         ierr = DMPlexGetTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
         for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
             PetscInt newentity = closure[2*ci];
+            if (isVertex && vStart <= newentity && newentity < vEnd) {
+                /* Is another vertex. Don't want to add. continue */
+                continue;
+            }
             PetscHashIAdd(ht, newentity, 0);
         }
         ierr = DMPlexRestoreTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
