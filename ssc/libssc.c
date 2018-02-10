@@ -75,6 +75,7 @@ typedef struct {
     PetscErrorCode  (*patchconstructop)(DM, PetscInt, PetscHashI); /* patch construction */
     PetscInt         codim; /* dimension or codimension of entities to loop over; */
     PetscInt         dim;   /* only oxne of them can be set */
+    PetscInt         vankaspace; /* What's the constraint space, when we're doing Vanka */
 } PC_PATCH;
 
 #undef __FUNCT__
@@ -264,8 +265,11 @@ static PetscErrorCode PCPatchCompleteCellPatch(DM dm, PetscHashI ht, PetscHashI 
 #undef __FUNCT__
 #define __FUNCT__ "PCPatchGetPointDofs"
 /* Given a hash table with a set of topological entities (pts), compute the degrees of
-   freedom in global concatenated numbering on those entities */
-static PetscErrorCode PCPatchGetPointDofs(PC_PATCH *patch, PetscHashI pts, PetscHashI dofs)
+   freedom in global concatenated numbering on those entities.
+   For Vanka smoothing, this needs to do something special: ignore dofs of the
+   constraint subspace on entities that aren't the base entity we're building the patch
+   around. */
+static PetscErrorCode PCPatchGetPointDofs(PC_PATCH *patch, PetscHashI pts, PetscHashI dofs, PetscInt base, PetscInt vankaspace)
 {
     PetscErrorCode    ierr;
     PetscInt          ldof, loff;
@@ -279,6 +283,20 @@ static PetscErrorCode PCPatchGetPointDofs(PC_PATCH *patch, PetscHashI pts, Petsc
         PetscSection dofSection = patch->dofSection[k];
         PetscInt bs = patch->bs[k];
         PetscInt subspaceOffset = patch->subspaceOffsets[k];
+
+        if (k == vankaspace) {
+            /* only get this subspace dofs at the base entity, not any others */
+            ierr = PetscSectionGetDof(dofSection, base, &ldof); CHKERRQ(ierr);
+            ierr = PetscSectionGetOffset(dofSection, base, &loff); CHKERRQ(ierr);
+            if (0 == ldof) continue;
+            for ( PetscInt j = loff; j < ldof + loff; j++ ) {
+                for ( PetscInt l = 0; l < bs; l++ ) {
+                    PetscInt dof = bs*j + l + subspaceOffset;
+                    PetscHashIAdd(dofs, dof, 0);
+                }
+            }
+            continue; /* skip the other dofs of this subspace */
+        }
 
         PetscHashIIterBegin(pts, hi);
         while (!PetscHashIIterAtEnd(pts, hi)) {
@@ -758,8 +776,8 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
            I see on the patch}\{dofs I am responsible for updating} */
         ierr = patch->patchconstructop(dm, v, ownedpts); CHKERRQ(ierr);
         ierr = PCPatchCompleteCellPatch(dm, ownedpts, seenpts); CHKERRQ(ierr);
-        ierr = PCPatchGetPointDofs(patch, ownedpts, owneddofs); CHKERRQ(ierr);
-        ierr = PCPatchGetPointDofs(patch, seenpts, seendofs); CHKERRQ(ierr);
+        ierr = PCPatchGetPointDofs(patch, ownedpts, owneddofs, v, patch->vankaspace); CHKERRQ(ierr);
+        ierr = PCPatchGetPointDofs(patch, seenpts, seendofs, v, -1); CHKERRQ(ierr);
         ierr = PCPatchComputeSetDifference(owneddofs, seendofs, artificialbcs); CHKERRQ(ierr);
 
         PetscHashIIterBegin(artificialbcs, hi);
@@ -1385,12 +1403,6 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(DM dm, PetscInt entity, Petsc
     PetscFunctionBegin;
     PetscHashIClear(ht);
 
-    /* Find out what the vertices are */
-    ierr = DMPlexGetDepthStratum(dm,  0, &vStart, &vEnd); CHKERRQ(ierr);
-
-    /* Are we dealing with a patch around a vertex? */
-    isVertex = (vStart <= entity && entity < vEnd);
-
     /* To start with, add the entity we care about */
     PetscHashIAdd(ht, entity, 0);
 
@@ -1402,10 +1414,6 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(DM dm, PetscInt entity, Petsc
         ierr = DMPlexGetTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
         for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
             PetscInt newentity = closure[2*ci];
-            if (isVertex && vStart <= newentity && newentity < vEnd) {
-                /* Is another vertex. Don't want to add. continue */
-                continue;
-            }
             PetscHashIAdd(ht, newentity, 0);
         }
         ierr = DMPlexRestoreTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
@@ -1448,6 +1456,10 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
             patch->patchconstructop = PCPatchConstruct_Current;
         } else if (patchConstructionType == 1) {
             patch->patchconstructop = PCPatchConstruct_Vanka;
+            ierr = PetscOptionsInt("-pc_patch_vanka_space", "What subspace is the constraint space for Vanka?", "PCSetFromOptions_PATCH", patch->vankaspace, &patch->vankaspace, &flg);
+            if (!flg) {
+                SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Must set Vanka subspace using -pc_patch_vanka_space when using Vanka");
+            }
         } else {
             SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Unknown patch construction type");
         }
@@ -1493,7 +1505,7 @@ static PetscErrorCode PCView_PATCH(PC pc, PetscViewer viewer)
     }
     ierr = PetscViewerASCIIPopTab(viewer); CHKERRQ(ierr);
     ierr = PetscViewerASCIIPrintf(viewer, "KSP on patches (all same):\n"); CHKERRQ(ierr);
-    
+
     if (patch->ksp) {
         ierr = PetscViewerGetSubViewer(viewer, PETSC_COMM_SELF, &sviewer); CHKERRQ(ierr);
         if (!rank) {
@@ -1530,6 +1542,7 @@ PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
     patch->multiplicative     = PETSC_FALSE;
     patch->codim              = -1;
     patch->dim                = -1;
+    patch->vankaspace         = -1;
     patch->patchconstructop   = PCPatchConstruct_Current;
 
     pc->data                 = (void *)patch;
