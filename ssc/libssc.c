@@ -72,10 +72,11 @@ typedef struct {
     PetscErrorCode  (*usercomputeop)(PC, Mat, PetscInt, const PetscInt *, PetscInt, const PetscInt *, void *);
     void            *usercomputectx;
 
-    PetscErrorCode  (*patchconstructop)(DM, PetscInt, PetscHashI); /* patch construction */
+    PetscErrorCode  (*patchconstructop)(void*, DM, PetscInt, PetscHashI); /* patch construction */
     PetscInt         codim; /* dimension or codimension of entities to loop over; */
     PetscInt         dim;   /* only oxne of them can be set */
     PetscInt         vankaspace; /* What's the constraint space, when we're doing Vanka */
+    PetscInt         vankadim;   /* In Vanka construction, should we eliminate any entities of a certain dimension? */
 } PC_PATCH;
 
 #undef __FUNCT__
@@ -423,7 +424,7 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
             continue;
         }
 
-        ierr = patch->patchconstructop(dm, v, ht); CHKERRQ(ierr);
+        ierr = patch->patchconstructop((void*)patch, dm, v, ht); CHKERRQ(ierr);
         ierr = PCPatchCompleteCellPatch(dm, ht, cht);
         PetscHashIIterBegin(cht, hi);
         while (!PetscHashIIterAtEnd(cht, hi)) {
@@ -452,7 +453,7 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
         if ( ndof <= 0 ) {
             continue;
         }
-        ierr = patch->patchconstructop(dm, v, ht); CHKERRQ(ierr);
+        ierr = patch->patchconstructop((void*)patch, dm, v, ht); CHKERRQ(ierr);
         ierr = PCPatchCompleteCellPatch(dm, ht, cht);
         ndof = 0;
         PetscHashIIterBegin(cht, hi);
@@ -774,7 +775,7 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
 
         /* Now figure out the artificial BCs: the set difference of {dofs on entities
            I see on the patch}\{dofs I am responsible for updating} */
-        ierr = patch->patchconstructop(dm, v, ownedpts); CHKERRQ(ierr);
+        ierr = patch->patchconstructop((void*)patch, dm, v, ownedpts); CHKERRQ(ierr);
         ierr = PCPatchCompleteCellPatch(dm, ownedpts, seenpts); CHKERRQ(ierr);
         ierr = PCPatchGetPointDofs(patch, ownedpts, owneddofs, v, patch->vankaspace); CHKERRQ(ierr);
         ierr = PCPatchGetPointDofs(patch, seenpts, seendofs, v, -1); CHKERRQ(ierr);
@@ -1335,7 +1336,7 @@ static PetscErrorCode PCSetUpOnBlocks_PATCH(PC pc)
 
 #undef __FUNCT__
 #define __FUNCT__ "PCPatchConstruct_Current"
-PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(DM dm, PetscInt entity, PetscHashI ht)
+PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(void *vpatch, DM dm, PetscInt entity, PetscHashI ht)
 {
     PetscErrorCode ierr;
     PetscInt       starSize, closureSize, fclosureSize;
@@ -1392,19 +1393,28 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(DM dm, PetscInt entity, Pet
 
 #undef __FUNCT__
 #define __FUNCT__ "PCPatchConstruct_Vanka"
-PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(DM dm, PetscInt entity, PetscHashI ht)
+PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(void *vpatch, DM dm, PetscInt entity, PetscHashI ht)
 {
     PetscErrorCode ierr;
+    PC_PATCH      *patch = (PC_PATCH*) vpatch;
     PetscInt       starSize, closureSize;
     PetscInt      *star = NULL, *closure = NULL;
-    PetscInt       vStart, vEnd;
-    PetscBool      isVertex;
+    PetscInt       iStart, iEnd;
+    PetscBool      shouldIgnore;
 
     PetscFunctionBegin;
     PetscHashIClear(ht);
 
     /* To start with, add the entity we care about */
     PetscHashIAdd(ht, entity, 0);
+
+    /* Should we ignore any topological entities of a certain dimension? */
+    if (patch->vankadim >= 0) {
+        shouldIgnore = PETSC_TRUE;
+        ierr = DMPlexGetDepthStratum(dm, patch->vankadim, &iStart, &iEnd); CHKERRQ(ierr);
+    } else {
+        shouldIgnore = PETSC_FALSE;
+    }
 
     /* Loop over all the cells that this entity connects to */
     ierr = DMPlexGetTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
@@ -1414,6 +1424,10 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(DM dm, PetscInt entity, Petsc
         ierr = DMPlexGetTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
         for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
             PetscInt newentity = closure[2*ci];
+            if (shouldIgnore && iStart <= newentity && newentity < iEnd) {
+                /* We've been told to ignore entities of this type.*/
+                continue;
+            }
             PetscHashIAdd(ht, newentity, 0);
         }
         ierr = DMPlexRestoreTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
@@ -1456,6 +1470,7 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
             patch->patchconstructop = PCPatchConstruct_Current;
         } else if (patchConstructionType == 1) {
             patch->patchconstructop = PCPatchConstruct_Vanka;
+            ierr = PetscOptionsInt("-pc_patch_vanka_dim", "Topological dimension of entities for Vanka to ignore", "PCSetFromOptions_PATCH", patch->vankadim, &patch->vankadim, &flg);
             ierr = PetscOptionsInt("-pc_patch_vanka_space", "What subspace is the constraint space for Vanka?", "PCSetFromOptions_PATCH", patch->vankaspace, &patch->vankaspace, &flg);
             if (!flg) {
                 SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Must set Vanka subspace using -pc_patch_vanka_space when using Vanka");
@@ -1543,6 +1558,7 @@ PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
     patch->codim              = -1;
     patch->dim                = -1;
     patch->vankaspace         = -1;
+    patch->vankadim           = -1;
     patch->patchconstructop   = PCPatchConstruct_Current;
 
     pc->data                 = (void *)patch;
