@@ -458,137 +458,6 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
 }
 
 #undef __FUNCT__
-#define __FUNCT__ "PCPatchCreateCellPatchFacets"
-/*
- * PCPatchCreateCellPatchFacets - Build the boundary facets for each cell patch
- *
- * Input Parameters:
- * + dm - The DMPlex object defining the mesh
- * . cellCounts - Section with counts of cells around each vertex
- * - cells - IS of the cell point indices of cells in each patch
- *
- * Output Parameters:
- * + facetCounts - Section with counts of boundary facets for each cell patch
- * - facets - IS of the boundary facet point indices for each cell patch.
- *
- * Note:
- *  The output facets do not include those facets that are the
- *  boundary of the domain, they are treated separately.
- */
-static PetscErrorCode PCPatchCreateCellPatchFacets(PC pc, PetscSection *facetCounts, IS *facets)
-{
-    PetscErrorCode  ierr;
-    PC_PATCH       *patch       = (PC_PATCH *)pc->data;
-    DM              dm          = patch->dm;
-    PetscSection    cellCounts  = patch->cellCounts;
-    IS              cells       = patch->cells;
-    PetscInt        vStart, vEnd, fStart, fEnd;
-    DMLabel         facetLabel;
-    PetscBool       flg;
-    PetscInt        totalFacets, facetIndex;
-    const PetscInt *cellFacets  = NULL;
-    const PetscInt *facetCells  = NULL;
-    PetscInt       *facetsArray = NULL;
-    const PetscInt *cellsArray  = NULL;
-    PetscHashI      ht;
-
-    PetscFunctionBegin;
-
-    /* This label marks facets exterior to the domain, which we don't
-     * treat here. */
-    ierr = DMGetLabel(dm, "exterior_facets", &facetLabel); CHKERRQ(ierr);
-
-    ierr = PetscSectionGetChart(patch->cellCounts, &vStart, &vEnd); CHKERRQ(ierr);
-    ierr = DMPlexGetHeightStratum(dm, 1, &fStart, &fEnd); CHKERRQ(ierr);
-    ierr = DMLabelCreateIndex(facetLabel, fStart, fEnd); CHKERRQ(ierr);
-
-    ierr = PetscSectionCreate(PETSC_COMM_SELF, facetCounts); CHKERRQ(ierr);
-    ierr = PetscSectionSetChart(*facetCounts, vStart, vEnd); CHKERRQ(ierr);
-
-    /* OK, so now we know the cells in each patch, and need to
-     * determine the facets that live on the boundary of each patch.
-     * We will apply homogeneous dirichlet bcs to the dofs on the
-     * boundary.  The exception is for facets that are exterior to
-     * the whole domain (where the normal bcs are applied). */
-
-    /* Used to keep track of the cells in the patch. */
-    PetscHashICreate(ht);
-
-    /* Guess at number of facets: each cell contributes one facet to
-     * the boundary facets.  Hopefully we will only realloc a little
-     * bit.  This is a good guess for simplices, but not as good for
-     * quads. */
-    ierr = ISGetSize(cells, &totalFacets); CHKERRQ(ierr);
-    ierr = PetscMalloc1(totalFacets, &facetsArray); CHKERRQ(ierr);
-    ierr = ISGetIndices(cells, &cellsArray); CHKERRQ(ierr);
-    facetIndex = 0;
-    for ( PetscInt v = vStart; v < vEnd; v++ ) {
-        PetscInt ndof, off;
-        ierr = PetscSectionGetDof(cellCounts, v, &ndof); CHKERRQ(ierr);
-        ierr = PetscSectionGetOffset(cellCounts, v, &off); CHKERRQ(ierr);
-        if ( ndof <= 0 ) {
-            /* No cells around this vertex. */
-            continue;
-        }
-        PetscHashIClear(ht);
-        for ( PetscInt ci = off; ci < ndof + off; ci++ ) {
-            const PetscInt c = cellsArray[ci];
-            PetscHashIAdd(ht, c, 0);
-        }
-        for ( PetscInt ci = off; ci < ndof + off; ci++ ) {
-            const PetscInt c = cellsArray[ci];
-            PetscInt       numFacets, numCells;
-            /* Facets of each cell */
-            ierr = DMPlexGetCone(dm, c, &cellFacets); CHKERRQ(ierr);
-            ierr = DMPlexGetConeSize(dm, c, &numFacets); CHKERRQ(ierr);
-            for ( PetscInt j = 0; j < numFacets; j++ ) {
-                const PetscInt f = cellFacets[j];
-                ierr = DMLabelHasPoint(facetLabel, f, &flg); CHKERRQ(ierr);
-                if (flg) {
-                    /* Facet is on domain boundary, don't select it */
-                    continue;
-                }
-                /* Cells in the support of the facet */
-                ierr = DMPlexGetSupport(dm, f, &facetCells); CHKERRQ(ierr);
-                ierr = DMPlexGetSupportSize(dm, f, &numCells); CHKERRQ(ierr);
-                if (numCells == 1) {
-                    /* This facet is on a process boundary, therefore
-                     * also a patch boundary */
-                    ierr = PetscSectionAddDof(*facetCounts, v, 1); CHKERRQ(ierr);
-                    goto addFacet;
-                } else {
-                    for ( PetscInt k = 0; k < numCells; k++ ) {
-                        PetscHashIHasKey(ht, facetCells[k], flg);
-                        if (!flg) {
-                            /* Facet's cell is not in the patch, so
-                             * it's on the patch boundary. */
-                            ierr = PetscSectionAddDof(*facetCounts, v, 1); CHKERRQ(ierr);
-                            goto addFacet;
-                        }
-                    }
-                }
-                continue;
-            addFacet:
-                if (facetIndex >= totalFacets) {
-                    totalFacets = (PetscInt)((1 + totalFacets)*1.2);
-                    ierr = PetscRealloc(sizeof(PetscInt)*totalFacets, &facetsArray); CHKERRQ(ierr);
-                }
-                facetsArray[facetIndex++] = f;
-            }
-        }
-    }
-    ierr = DMLabelDestroyIndex(facetLabel); CHKERRQ(ierr);
-    ierr = ISRestoreIndices(cells, &cellsArray); CHKERRQ(ierr);
-    PetscHashIDestroy(ht);
-
-    ierr = PetscSectionSetUp(*facetCounts); CHKERRQ(ierr);
-    ierr = PetscRealloc(sizeof(PetscInt)*facetIndex, &facetsArray); CHKERRQ(ierr);
-    ierr = ISCreateGeneral(PETSC_COMM_SELF, facetIndex, facetsArray, PETSC_OWN_POINTER, facets); CHKERRQ(ierr);
-
-    PetscFunctionReturn(0);
-}
-
-#undef __FUNCT__
 #define __FUNCT__ "PCPatchCreateCellPatchDiscretisationInfo"
 /*
  * PCPatchCreateCellPatchDiscretisationInfo - Build the dof maps for cell patches
@@ -798,9 +667,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc)
 
 #undef __FUNCT__
 #define __FUNCT__ "PCPatchCreateCellPatchBCs"
-static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
-                                                PetscSection facetCounts,
-                                                IS facets)
+static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
 {
     PetscErrorCode  ierr;
     PC_PATCH       *patch      = (PC_PATCH *)pc->data;
@@ -823,7 +690,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
     PetscInt        closureSize;
     PetscInt       *closure    = NULL;
     const PetscInt *gtolArray;
-    const PetscInt *facetsArray;
     PetscFunctionBegin;
 
     PetscHashICreate(globalBcs);
@@ -856,7 +722,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
     }
 
     ierr = ISGetIndices(gtol, &gtolArray); CHKERRQ(ierr);
-    ierr = ISGetIndices(facets, &facetsArray); CHKERRQ(ierr);
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
         PetscInt numBcs, dof, off;
         PetscInt bcIndex = 0;
@@ -911,7 +776,7 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
         }
 
         /* OK, now we have a hash table with all the bcs indicated by
-         * the facets and global bcs */
+         * the artificial and global bcs */
         PetscHashISize(localBcs, numBcs);
         ierr = PetscSectionSetDof(bcCounts, v, numBcs); CHKERRQ(ierr);
         ierr = PetscMalloc1(numBcs, &bcsArray); CHKERRQ(ierr);
@@ -923,7 +788,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
         ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
     }
     ierr = ISRestoreIndices(gtol, &gtolArray); CHKERRQ(ierr);
-    ierr = ISRestoreIndices(facets, &facetsArray); CHKERRQ(ierr);
     PetscHashIDestroy(artificialbcs);
     PetscHashIDestroy(seendofs);
     PetscHashIDestroy(owneddofs);
@@ -1183,8 +1047,6 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
     PetscFunctionBegin;
 
     if (!pc->setupcalled) {
-        PetscSection facetCounts;
-        IS           facets;
         PetscInt     pStart, pEnd;
         PetscInt     localSize;
         ierr = PetscLogEventBegin(PC_Patch_CreatePatches, pc, 0, 0, 0); CHKERRQ(ierr);
@@ -1209,11 +1071,8 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
         ierr = VecSetUp(patch->localX); CHKERRQ(ierr);
         ierr = VecDuplicate(patch->localX, &patch->localY); CHKERRQ(ierr);
         ierr = PCPatchCreateCellPatches(pc); CHKERRQ(ierr);
-        ierr = PCPatchCreateCellPatchFacets(pc, &facetCounts, &facets); CHKERRQ(ierr);
         ierr = PCPatchCreateCellPatchDiscretisationInfo(pc); CHKERRQ(ierr);
-        ierr = PCPatchCreateCellPatchBCs(pc, facetCounts, facets); CHKERRQ(ierr);
-        ierr = PetscSectionDestroy(&facetCounts); CHKERRQ(ierr);
-        ierr = ISDestroy(&facets); CHKERRQ(ierr);
+        ierr = PCPatchCreateCellPatchBCs(pc); CHKERRQ(ierr);
 
         /* OK, now build the work vectors */
         ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, &pEnd); CHKERRQ(ierr);
