@@ -231,17 +231,17 @@ static PetscErrorCode PCPatchCompleteCellPatch(DM dm, PetscHashI ht, PetscHashI 
     PetscErrorCode    ierr;
     PetscHashIIter    hi;
     PetscInt          entity;
-    PetscInt          dummy;
 
     PetscFunctionBegin;
 
 
+    PetscHashIClear(cht);
     PetscHashIIterBegin(ht, hi);
     while (!PetscHashIIterAtEnd(ht, hi)) {
         PetscInt       starSize, closureSize;
         PetscInt      *star = NULL, *closure = NULL;
 
-        PetscHashIIterGetKeyVal(ht, hi, entity, dummy);
+        PetscHashIIterGetKey(ht, hi, entity);
         PetscHashIIterNext(ht, hi);
 
         /* Loop over all the cells that this entity connects to */
@@ -260,6 +260,79 @@ static PetscErrorCode PCPatchCompleteCellPatch(DM dm, PetscHashI ht, PetscHashI 
     }
     PetscFunctionReturn(0);
 }
+
+#undef __FUNCT__
+#define __FUNCT__ "PCPatchGetPointDofs"
+/* Given a hash table with a set of topological entities (pts), compute the degrees of
+   freedom in global concatenated numbering on those entities */
+static PetscErrorCode PCPatchGetPointDofs(PC_PATCH *patch, PetscHashI pts, PetscHashI dofs)
+{
+    PetscErrorCode    ierr;
+    PetscInt          ldof, loff;
+    PetscHashIIter    hi;
+    PetscInt          p;
+
+    PetscFunctionBegin;
+    PetscHashIClear(dofs);
+
+    for ( PetscInt k = 0; k < patch->nsubspaces; k++ ) {
+        PetscSection dofSection = patch->dofSection[k];
+        PetscInt bs = patch->bs[k];
+        PetscInt subspaceOffset = patch->subspaceOffsets[k];
+
+        PetscHashIIterBegin(pts, hi);
+        while (!PetscHashIIterAtEnd(pts, hi)) {
+            PetscHashIIterGetKey(pts, hi, p);
+            PetscHashIIterNext(pts, hi);
+            ierr = PetscSectionGetDof(dofSection, p, &ldof); CHKERRQ(ierr);
+            ierr = PetscSectionGetOffset(dofSection, p, &loff); CHKERRQ(ierr);
+            if (0 == ldof) continue;
+            for ( PetscInt j = loff; j < ldof + loff; j++ ) {
+                for ( PetscInt l = 0; l < bs; l++ ) {
+                    PetscInt dof = bs*j + l + subspaceOffset;
+                    PetscHashIAdd(dofs, dof, 0);
+                }
+            }
+        }
+    }
+
+    PetscFunctionReturn(0);
+}
+
+#undef __FUNCT__
+#define __FUNCT__ "PCPatchComputeSetDifference"
+/* Given two hash tables A and B, compute the keys in B that are not in A, and
+   put them in C */
+static PetscErrorCode PCPatchComputeSetDifference(PetscHashI A, PetscHashI B, PetscHashI C)
+{
+    PetscErrorCode    ierr;
+    PetscHashIIter    hi;
+    PetscInt          key, val;
+    PetscBool         flg;
+
+    PetscFunctionBegin;
+    PetscHashIClear(C);
+
+    PetscHashIIterBegin(B, hi);
+    while (!PetscHashIIterAtEnd(B, hi)) {
+        PetscHashIIterGetKeyVal(B, hi, key, val);
+        PetscHashIIterNext(B, hi);
+        PetscHashIHasKey(A, key, flg);
+        if (!flg) {
+            PetscHashIAdd(C, key, val);
+        }
+    }
+
+    PetscFunctionReturn(0);
+}
+
+#undef __FUNCT__
+#define __FUNCT__ "PCPatchCompleteCellPatch"
+/* On entry, ht contains the topological entities whose dofs we are responsible for solving for;
+   on exit, cht contains all the topological entities we need to compute their residuals.
+   In full generality this should incorporate knowledge of the sparsity pattern of the matrix;
+   here we assume a standard FE sparsity pattern.*/
+
 
 #undef __FUNCT__
 #define __FUNCT__ "PCPatchCreateCellPatches"
@@ -332,14 +405,12 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
             continue;
         }
 
-        PetscHashIClear(ht);
-        PetscHashIClear(cht);
         ierr = patch->patchconstructop(dm, v, ht); CHKERRQ(ierr);
         ierr = PCPatchCompleteCellPatch(dm, ht, cht);
         PetscHashIIterBegin(cht, hi);
         while (!PetscHashIIterAtEnd(cht, hi)) {
-            PetscInt entity, dummy;
-            PetscHashIIterGetKeyVal(cht, hi, entity, dummy);
+            PetscInt entity;
+            PetscHashIIterGetKey(cht, hi, entity);
             if (cStart <= entity && entity < cEnd) {
                 ierr = PetscSectionAddDof(cellCounts, v, 1); CHKERRQ(ierr);
             }
@@ -363,15 +434,13 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
         if ( ndof <= 0 ) {
             continue;
         }
-        PetscHashIClear(ht);
-        PetscHashIClear(cht);
         ierr = patch->patchconstructop(dm, v, ht); CHKERRQ(ierr);
         ierr = PCPatchCompleteCellPatch(dm, ht, cht);
         ndof = 0;
         PetscHashIIterBegin(cht, hi);
         while (!PetscHashIIterAtEnd(cht, hi)) {
-            PetscInt entity, dummy;
-            PetscHashIIterGetKeyVal(cht, hi, entity, dummy);
+            PetscInt entity;
+            PetscHashIIterGetKey(cht, hi, entity);
             if (cStart <= entity && entity < cEnd) {
                 cellsArray[ndof + off] = entity;
                 ndof++;
@@ -429,7 +498,7 @@ static PetscErrorCode PCPatchCreateCellPatchFacets(PC pc, PetscSection *facetCou
      * treat here. */
     ierr = DMGetLabel(dm, "exterior_facets", &facetLabel); CHKERRQ(ierr);
 
-    ierr = DMPlexGetDepthStratum(dm, 0, &vStart, &vEnd); CHKERRQ(ierr);
+    ierr = PetscSectionGetChart(patch->cellCounts, &vStart, &vEnd); CHKERRQ(ierr);
     ierr = DMPlexGetHeightStratum(dm, 1, &fStart, &fEnd); CHKERRQ(ierr);
     ierr = DMLabelCreateIndex(facetLabel, fStart, fEnd); CHKERRQ(ierr);
 
@@ -528,8 +597,6 @@ static PetscErrorCode PCPatchCreateCellPatchFacets(PC pc, PetscSection *facetCou
  * + dm - The DMPlex object defining the mesh
  * . cellCounts - Section with counts of cells around each vertex
  * . cells - IS of the cell point indices of cells in each patch
- * . facetCounts - Section with counts of boundary facets for each cell patch
- * . facets - IS of the boundary facet point indices for each cell patch.
  * . cellNumbering - Section mapping plex cell points to Firedrake cell indices.
  * . nodesPerCell - number of dofs per cell.
  * - cellNodeMap - map from cells to node indices (nodesPerCell * numCells)
@@ -539,9 +606,7 @@ static PetscErrorCode PCPatchCreateCellPatchFacets(PC pc, PetscSection *facetCou
  * . gtolCounts - Section with counts of dofs per cell patch
  * - gtol - IS mapping from global dofs to local dofs for each patch. 
  */
-static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc,
-                                                               PetscSection facetCounts,
-                                                               IS facets)
+static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc)
 {
     PetscErrorCode  ierr;
     PC_PATCH       *patch           = (PC_PATCH *)pc->data;
@@ -750,6 +815,8 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
     PetscHashI      localBcs;
     PetscHashI      multLocalBcs;
     PetscHashI      patchDofs;
+    PetscHashI      ownedpts, seenpts, owneddofs, seendofs, artificialbcs;
+    PetscHashIIter  hi;
     PetscInt       *bcsArray   = NULL;
     PetscInt       *multBcsArray   = NULL;
     PetscInt        vStart, vEnd;
@@ -769,8 +836,13 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
     PetscHashICreate(patchDofs);
     PetscHashICreate(localBcs);
     PetscHashICreate(multLocalBcs);
+    PetscHashICreate(ownedpts);
+    PetscHashICreate(seenpts);
+    PetscHashICreate(owneddofs);
+    PetscHashICreate(seendofs);
+    PetscHashICreate(artificialbcs);
 
-    ierr = PetscSectionGetChart(facetCounts, &vStart, &vEnd); CHKERRQ(ierr);
+    ierr = PetscSectionGetChart(patch->cellCounts, &vStart, &vEnd); CHKERRQ(ierr);
     ierr = PetscSectionCreate(PETSC_COMM_SELF, &patch->bcCounts); CHKERRQ(ierr);
     bcCounts = patch->bcCounts;
     ierr = PetscSectionSetChart(bcCounts, vStart, vEnd); CHKERRQ(ierr);
@@ -817,38 +889,27 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
             ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, multBcsArray, PETSC_OWN_POINTER, &(patch->multBcs[v - vStart])); CHKERRQ(ierr);
         }
 
-        ierr = PetscSectionGetDof(facetCounts, v, &dof); CHKERRQ(ierr);
-        ierr = PetscSectionGetOffset(facetCounts, v, &off); CHKERRQ(ierr);
-        for ( PetscInt i = off; i < off + dof; i++ ) {
-            const PetscInt f = facetsArray[i];
-            ierr = DMPlexGetTransitiveClosure(dm, f, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
-            for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
-                PetscInt ldof, loff;
-                const PetscInt p = closure[2*ci];
-                for ( PetscInt k = 0; k < patch->nsubspaces; k++ ) {
-                    PetscSection dofSection = patch->dofSection[k];
-                    PetscInt bs = patch->bs[k];
-                    PetscInt subspaceOffset = patch->subspaceOffsets[k];
+        /* Now figure out the artificial BCs: the set difference of {dofs on entities
+           I see on the patch}\{dofs I am responsible for updating} */
+        ierr = patch->patchconstructop(dm, v, ownedpts); CHKERRQ(ierr);
+        ierr = PCPatchCompleteCellPatch(dm, ownedpts, seenpts); CHKERRQ(ierr);
+        ierr = PCPatchGetPointDofs(patch, ownedpts, owneddofs); CHKERRQ(ierr);
+        ierr = PCPatchGetPointDofs(patch, seenpts, seendofs); CHKERRQ(ierr);
+        ierr = PCPatchComputeSetDifference(owneddofs, seendofs, artificialbcs); CHKERRQ(ierr);
 
-                    ierr = PetscSectionGetDof(dofSection, p, &ldof); CHKERRQ(ierr);
-                    ierr = PetscSectionGetOffset(dofSection, p, &loff); CHKERRQ(ierr);
-                    if ( ldof > 0 ) {
-                        for ( PetscInt j = loff; j < ldof + loff; j++ ) {
-                            for ( PetscInt l = 0; l < bs; l++ ) {
-                                PetscInt localDof;
-                                PetscInt key = bs*j + l + subspaceOffset;
-                                PetscHashIMap(patchDofs, key, localDof);
-                                if ( localDof == -1 ) {
-                                    SETERRQ(PETSC_COMM_SELF, PETSC_ERR_ARG_OUTOFRANGE,
-                                            "Didn't find facet dof in patch dof\n");
-                                }
-                                PetscHashIAdd(localBcs, localDof, 0);
-                            }
-                        }
-                    }
-                }
+        PetscHashIIterBegin(artificialbcs, hi);
+        while (!PetscHashIIterAtEnd(artificialbcs, hi)) {
+            PetscInt globalDof, localDof;
+            PetscHashIIterGetKey(artificialbcs, hi, globalDof);
+            PetscHashIIterNext(artificialbcs, hi);
+            PetscHashIMap(patchDofs, globalDof, localDof);
+            if ( localDof == -1 ) {
+                SETERRQ(PETSC_COMM_SELF, PETSC_ERR_ARG_OUTOFRANGE,
+                        "Didn't find dof in patch\n");
             }
+            PetscHashIAdd(localBcs, localDof, 0);
         }
+
         /* OK, now we have a hash table with all the bcs indicated by
          * the facets and global bcs */
         PetscHashISize(localBcs, numBcs);
@@ -863,6 +924,11 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc,
     }
     ierr = ISRestoreIndices(gtol, &gtolArray); CHKERRQ(ierr);
     ierr = ISRestoreIndices(facets, &facetsArray); CHKERRQ(ierr);
+    PetscHashIDestroy(artificialbcs);
+    PetscHashIDestroy(seendofs);
+    PetscHashIDestroy(owneddofs);
+    PetscHashIDestroy(seenpts);
+    PetscHashIDestroy(ownedpts);
     PetscHashIDestroy(localBcs);
     PetscHashIDestroy(multLocalBcs);
     PetscHashIDestroy(patchDofs);
@@ -1144,7 +1210,7 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
         ierr = VecDuplicate(patch->localX, &patch->localY); CHKERRQ(ierr);
         ierr = PCPatchCreateCellPatches(pc); CHKERRQ(ierr);
         ierr = PCPatchCreateCellPatchFacets(pc, &facetCounts, &facets); CHKERRQ(ierr);
-        ierr = PCPatchCreateCellPatchDiscretisationInfo(pc, facetCounts, facets); CHKERRQ(ierr);
+        ierr = PCPatchCreateCellPatchDiscretisationInfo(pc); CHKERRQ(ierr);
         ierr = PCPatchCreateCellPatchBCs(pc, facetCounts, facets); CHKERRQ(ierr);
         ierr = PetscSectionDestroy(&facetCounts); CHKERRQ(ierr);
         ierr = ISDestroy(&facets); CHKERRQ(ierr);
@@ -1401,6 +1467,7 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(DM dm, PetscInt entity, Pet
     PetscInt       fStart, fEnd;
 
     PetscFunctionBegin;
+    PetscHashIClear(ht);
 
     /* Find out what the facets and vertices are */
     ierr = DMPlexGetHeightStratum(dm, 1, &fStart, &fEnd); CHKERRQ(ierr);
@@ -1455,6 +1522,7 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(DM dm, PetscInt entity, Petsc
     PetscInt      *star = NULL, *closure = NULL;
 
     PetscFunctionBegin;
+    PetscHashIClear(ht);
 
     /* To start with, add the entity we care about */
     PetscHashIAdd(ht, entity, 0);
