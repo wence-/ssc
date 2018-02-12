@@ -529,6 +529,8 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc)
         ierr = PetscSectionGetDof(cellCounts, v, &dof); CHKERRQ(ierr);
         ierr = PetscSectionGetOffset(cellCounts, v, &off); CHKERRQ(ierr);
 
+        if ( dof <= 0 ) continue;
+
         for ( PetscInt k = 0; k < patch->nsubspaces; k++ ) {
             PetscInt nodesPerCell = patch->nodesPerCell[k];
             PetscInt subspaceOffset = patch->subspaceOffsets[k];
@@ -590,6 +592,8 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc)
         PetscHashIClear(ht);
         ierr = PetscSectionGetDof(cellCounts, v, &dof); CHKERRQ(ierr);
         ierr = PetscSectionGetOffset(cellCounts, v, &off); CHKERRQ(ierr);
+
+        if ( dof <= 0 ) continue;
 
         for ( PetscInt k = 0; k < patch->nsubspaces; k++ ) {
             PetscInt nodesPerCell = patch->nodesPerCell[k];
@@ -743,6 +747,15 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
         PetscHashIClear(multLocalBcs);
         ierr = PetscSectionGetDof(gtolCounts, v, &dof); CHKERRQ(ierr);
         ierr = PetscSectionGetOffset(gtolCounts, v, &off); CHKERRQ(ierr);
+
+        if ( dof <= 0 ) {
+            patch->bcs[v - vStart] = NULL;
+            if (patch->multiplicative) {
+                patch->multBcs[v - vStart] = NULL;
+            }
+            continue;
+        }
+
         for ( PetscInt i = off; i < off + dof; i++ ) {
             PetscBool flg;
             const PetscInt globalDof = gtolArray[i];
@@ -781,8 +794,8 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
             PetscHashIIterNext(artificialbcs, hi);
             PetscHashIMap(patchDofs, globalDof, localDof);
             if ( localDof == -1 ) {
-                SETERRQ(PETSC_COMM_SELF, PETSC_ERR_ARG_OUTOFRANGE,
-                        "Didn't find dof in patch\n");
+                SETERRQ2(PETSC_COMM_SELF, PETSC_ERR_ARG_OUTOFRANGE,
+                         "Patch %d Didn't find dof %d in patch\n", v - vStart, globalDof);
             }
             PetscHashIAdd(localBcs, localDof, 0);
         }
@@ -984,6 +997,10 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, Mat multMat, PetscI
 
     ierr = PetscSectionGetDof(patch->cellCounts, which, &ncell); CHKERRQ(ierr);
     ierr = PetscSectionGetOffset(patch->cellCounts, which, &offset); CHKERRQ(ierr);
+    if ( ncell <= 0 ) {
+        ierr = PetscLogEventEnd(PC_Patch_ComputeOp, pc, 0, 0, 0); CHKERRQ(ierr);
+        PetscFunctionReturn(0);
+    }
     PetscStackPush("PCPatch user callback");
     ierr = patch->usercomputeop(pc, mat, ncell, cellsArray + offset, ncell*patch->totalDofsPerCell, dofsArray + offset*patch->totalDofsPerCell, patch->usercomputectx); CHKERRQ(ierr);
     PetscStackPop;
