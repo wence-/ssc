@@ -14,9 +14,8 @@ cdef extern from "petsc.h" nogil:
 
 cdef extern from "libssc.h" nogil:
     int PCPatchSetDMPlex(PETSc.PetscPC, PETSc.PetscDM)
-    int PCPatchSetDefaultSF(PETSc.PetscPC, PETSc.PetscSF)
     int PCPatchSetCellNumbering(PETSc.PetscPC, PETSc.PetscSection)
-    int PCPatchSetDiscretisationInfo(PETSc.PetscPC, PetscInt, PETSc.PetscSection *,
+    int PCPatchSetDiscretisationInfo(PETSc.PetscPC, PetscInt, PETSc.PetscDM *,
                                      PetscInt *, PetscInt *,
                                      const PetscInt **,
                                      const PetscInt *,
@@ -84,13 +83,10 @@ cdef class PC(PETSc.PC):
     def setPatchDMPlex(self, PETSc.DM dm not None):
         CHKERR( PCPatchSetDMPlex(self.pc, dm.dm) )
 
-    def setPatchDefaultSF(self, PETSc.SF sf not None):
-        CHKERR( PCPatchSetDefaultSF(self.pc, sf.sf) )
-
     def setPatchCellNumbering(self, PETSc.Section sec not None):
         CHKERR( PCPatchSetCellNumbering(self.pc, sec.sec) )
 
-    def setPatchDiscretisationInfo(self, dofSections,
+    def setPatchDiscretisationInfo(self, dms,
                                    numpy.ndarray[PetscInt, ndim=1, mode="c"] bs,
                                    cellNodeMaps,
                                    numpy.ndarray[PetscInt, ndim=1, mode="c"] subspaceOffsets,
@@ -100,7 +96,7 @@ cdef class PC(PETSc.PC):
             PetscInt numBcs
             PetscInt *cnodesPerCell = NULL
             const PetscInt **ccellNodeMaps = NULL
-            PETSc.PetscSection* csections = NULL
+            PETSc.PetscDM* cdms = NULL
             PetscInt i
             numpy.ndarray[PetscInt, ndim=2, mode="c"] tmp
 
@@ -109,17 +105,17 @@ cdef class PC(PETSc.PC):
         numBcs = asInt(bcNodes.shape[0])
 
         CHKERR( PetscMalloc1(numSubSpaces, &cnodesPerCell) )
-        CHKERR( PetscMalloc1(numSubSpaces, &csections) )
+        CHKERR( PetscMalloc1(numSubSpaces, &cdms) )
         CHKERR( PetscMalloc1(numSubSpaces, &ccellNodeMaps) )
 
         for i from 0 <= i < numSubSpaces:
             tmp = <numpy.ndarray?>(cellNodeMaps[i])
             ccellNodeMaps[i] = <PetscInt *> tmp.data
             cnodesPerCell[i] = cellNodeMaps[i].shape[1]
-            csections[i] = (<PETSc.Section?>dofSections[i]).sec
+            cdms[i] = (<PETSc.DM?>dms[i]).dm
 
         CHKERR( PCPatchSetDiscretisationInfo(self.pc, numSubSpaces,
-                                             csections,
+                                             cdms,
                                              <PetscInt *>bs.data,
                                              cnodesPerCell,
                                              ccellNodeMaps,
@@ -129,7 +125,7 @@ cdef class PC(PETSc.PC):
 
         CHKERR ( PetscFree(ccellNodeMaps) )
         CHKERR ( PetscFree(cnodesPerCell) )
-        CHKERR ( PetscFree(csections) )
+        CHKERR ( PetscFree(cdms) )
 
     def setPatchComputeOperator(self, operator, args=None, kargs=None):
         if args  is None: args  = ()
