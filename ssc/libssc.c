@@ -233,6 +233,7 @@ static PetscErrorCode PCPatchCompleteCellPatch(DM dm, PetscHashI ht, PetscHashI 
     PetscErrorCode    ierr;
     PetscHashIIter    hi;
     PetscInt          entity;
+    PetscInt         *star = NULL, *closure = NULL;
 
     PetscFunctionBegin;
 
@@ -241,7 +242,6 @@ static PetscErrorCode PCPatchCompleteCellPatch(DM dm, PetscHashI ht, PetscHashI 
     PetscHashIIterBegin(ht, hi);
     while (!PetscHashIIterAtEnd(ht, hi)) {
         PetscInt       starSize, closureSize;
-        PetscInt      *star = NULL, *closure = NULL;
 
         PetscHashIIterGetKey(ht, hi, entity);
         PetscHashIIterNext(ht, hi);
@@ -256,10 +256,11 @@ static PetscErrorCode PCPatchCompleteCellPatch(DM dm, PetscHashI ht, PetscHashI 
                 PetscInt seenentity = closure[2*ci];
                 PetscHashIAdd(cht, seenentity, 0);
             }
-            ierr = DMPlexRestoreTransitiveClosure(dm, ownedentity, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
         }
-        ierr = DMPlexRestoreTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
     }
+    /* Only restore work arrays at very end. */
+    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &closure); CHKERRQ(ierr);
+    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, NULL, &star); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -344,14 +345,6 @@ static PetscErrorCode PCPatchComputeSetDifference(PetscHashI A, PetscHashI B, Pe
 
     PetscFunctionReturn(0);
 }
-
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchCompleteCellPatch"
-/* On entry, ht contains the topological entities whose dofs we are responsible for solving for;
-   on exit, cht contains all the topological entities we need to compute their residuals.
-   In full generality this should incorporate knowledge of the sparsity pattern of the matrix;
-   here we assume a standard FE sparsity pattern.*/
-
 
 #undef __FUNCT__
 #define __FUNCT__ "PCPatchCreateCellPatches"
@@ -1343,6 +1336,7 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(void *vpatch, DM dm, PetscI
     PetscInt      *star = NULL, *closure = NULL, *fclosure = NULL;
     PetscInt       vStart, vEnd;
     PetscInt       fStart, fEnd;
+    PetscInt       cStart, cEnd;
 
     PetscFunctionBegin;
     PetscHashIClear(ht);
@@ -1350,6 +1344,7 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(void *vpatch, DM dm, PetscI
     /* Find out what the facets and vertices are */
     ierr = DMPlexGetHeightStratum(dm, 1, &fStart, &fEnd); CHKERRQ(ierr);
     ierr = DMPlexGetDepthStratum(dm,  0, &vStart, &vEnd); CHKERRQ(ierr);
+    ierr = DMPlexGetHeightStratum(dm, 0, &cStart, &cEnd); CHKERRQ(ierr);
 
     /* To start with, add the entity we care about */
     PetscHashIAdd(ht, entity, 0);
@@ -1358,6 +1353,7 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(void *vpatch, DM dm, PetscI
     ierr = DMPlexGetTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
     for ( PetscInt si = 0; si < starSize; si++ ) {
         PetscInt cell = star[2*si];
+        if ( cell < cStart || cell >= cEnd) continue;
         /* now loop over all entities in the closure of that cell */
         ierr = DMPlexGetTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
         for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
@@ -1377,7 +1373,6 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(void *vpatch, DM dm, PetscI
                         break;
                     }
                 }
-                ierr = DMPlexRestoreTransitiveClosure(dm, newentity, PETSC_TRUE, &fclosureSize, &fclosure); CHKERRQ(ierr);
                 if (should_add) {
                     PetscHashIAdd(ht, newentity, 0);
                 }
@@ -1385,9 +1380,10 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(void *vpatch, DM dm, PetscI
                 PetscHashIAdd(ht, newentity, 0);
             }
         }
-        ierr = DMPlexRestoreTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
     }
-    ierr = DMPlexRestoreTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
+    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &fclosure); CHKERRQ(ierr);
+    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &closure); CHKERRQ(ierr);
+    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, NULL, &star); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -1400,6 +1396,7 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(void *vpatch, DM dm, PetscInt
     PetscInt       starSize, closureSize;
     PetscInt      *star = NULL, *closure = NULL;
     PetscInt       iStart, iEnd;
+    PetscInt       cStart, cEnd;
     PetscBool      shouldIgnore;
 
     PetscFunctionBegin;
@@ -1415,11 +1412,13 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(void *vpatch, DM dm, PetscInt
     } else {
         shouldIgnore = PETSC_FALSE;
     }
+    ierr = DMPlexGetHeightStratum(dm, 0, &cStart, &cEnd); CHKERRQ(ierr);
 
     /* Loop over all the cells that this entity connects to */
     ierr = DMPlexGetTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
     for ( PetscInt si = 0; si < starSize; si++ ) {
         PetscInt cell = star[2*si];
+        if ( cell < cStart || cell >= cEnd) continue;
         /* now loop over all entities in the closure of that cell */
         ierr = DMPlexGetTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
         for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
@@ -1430,9 +1429,9 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(void *vpatch, DM dm, PetscInt
             }
             PetscHashIAdd(ht, newentity, 0);
         }
-        ierr = DMPlexRestoreTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
     }
-    ierr = DMPlexRestoreTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
+    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &closure); CHKERRQ(ierr);
+    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, NULL, &star); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
