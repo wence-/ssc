@@ -325,7 +325,6 @@ static PetscErrorCode PCPatchGetPointDofs(PC_PATCH *patch, PetscHashI pts, Petsc
    put them in C */
 static PetscErrorCode PCPatchComputeSetDifference(PetscHashI A, PetscHashI B, PetscHashI C)
 {
-    PetscErrorCode    ierr;
     PetscHashIIter    hi;
     PetscInt          key, val;
     PetscBool         flg;
@@ -366,8 +365,6 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
     DMLabel         ghost;
     PetscInt        pStart, pEnd, vStart, vEnd, cStart, cEnd;
     PetscBool       flg;
-    PetscInt        closureSize;
-    PetscInt       *closure    = NULL;
     PetscInt       *cellsArray = NULL;
     PetscInt        numCells;
     PetscSection    cellCounts;
