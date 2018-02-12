@@ -242,7 +242,6 @@ static PetscErrorCode PCPatchCreateDefaultSF_Private(PC pc, PetscInt n, const Pe
         ierr = PetscFree(remoteOffsets); CHKERRQ(ierr);
         ierr = PetscSFCreate(PetscObjectComm((PetscObject)pc), &patch->defaultSF); CHKERRQ(ierr);
         ierr = PetscSFSetGraph(patch->defaultSF, allRoots, allLeaves, ilocal, PETSC_OWN_POINTER, iremote, PETSC_OWN_POINTER); CHKERRQ(ierr);
-        ierr = PetscSFView(patch->defaultSF, 0); CHKERRQ(ierr);
     }
     PetscFunctionReturn(0);
 }
@@ -1233,6 +1232,9 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
         ierr = VecDuplicate(patch->localX, &patch->dof_weights); CHKERRQ(ierr);
         ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
         for ( PetscInt i = 0; i < patch->npatch; i++ ) {
+            PetscInt dof;
+            ierr = PetscSectionGetDof(patch->gtolCounts, i + pStart, &dof); CHKERRQ(ierr);
+            if ( dof <= 0 ) continue;
             ierr = VecSet(patch->patchX[i], 1.0); CHKERRQ(ierr);
             /* TODO: Do we need different scatters for X and Y? */
             ierr = VecGetArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
@@ -1372,10 +1374,12 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
             ierr = MatDestroy(&multMat); CHKERRQ(ierr);
         }
     }
+    if (patch->partition_of_unity) {
+        /* XXX: should we do this on the global vector? */
+        ierr = VecPointwiseMult(patch->localY, patch->localY, patch->dof_weights); CHKERRQ(ierr);
+    }
     /* Now patch->localY contains the solution of the patch solves, so
-     * we need to combine them all.  This hardcodes an ADDITIVE
-     * combination right now.  If one wanted multiplicative, the
-     * scatter/gather stuff would have to be reworked a bit. */
+     * we need to combine them all. */
     ierr = VecSet(y, 0.0); CHKERRQ(ierr);
     /* PEF: replace with VecCopy for now */
     ierr = VecGetArray(y, &globalY); CHKERRQ(ierr);
@@ -1384,11 +1388,6 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = PetscSFReduceEnd(patch->defaultSF, MPIU_SCALAR, localY, globalY, MPI_SUM); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(patch->localY, (const PetscScalar **)&localY); CHKERRQ(ierr);
 
-    if (patch->partition_of_unity) {
-        ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
-        ierr = VecPointwiseMult(y, y, patch->dof_weights); CHKERRQ(ierr);
-        ierr = VecGetArray(y, &globalY); CHKERRQ(ierr);
-    }
 
     /* Now we need to send the global BC values through */
     ierr = VecGetArrayRead(x, &globalX); CHKERRQ(ierr);
