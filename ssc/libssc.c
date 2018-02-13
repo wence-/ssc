@@ -8,8 +8,6 @@ PetscLogEvent PC_Patch_CreatePatches, PC_Patch_ComputeOp, PC_Patch_Solve, PC_Pat
 
 static PetscBool PCPatchPackageInitialized = PETSC_FALSE;
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchInitializePackage"
 PETSC_EXTERN PetscErrorCode PCPatchInitializePackage(void)
 {
     PetscErrorCode ierr;
@@ -77,8 +75,6 @@ typedef struct {
     PetscInt         vankadim;   /* In Vanka construction, should we eliminate any entities of a certain dimension? */
 } PC_PATCH;
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchSetDMPlex"
 PETSC_EXTERN PetscErrorCode PCPatchSetDMPlex(PC pc, DM dm)
 {
     PetscErrorCode  ierr;
@@ -90,8 +86,6 @@ PETSC_EXTERN PetscErrorCode PCPatchSetDMPlex(PC pc, DM dm)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchSetSaveOperators"
 PETSC_EXTERN PetscErrorCode PCPatchSetSaveOperators(PC pc, PetscBool flg)
 {
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
@@ -101,8 +95,6 @@ PETSC_EXTERN PetscErrorCode PCPatchSetSaveOperators(PC pc, PetscBool flg)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchSetPartitionOfUnity"
 PETSC_EXTERN PetscErrorCode PCPatchSetPartitionOfUnity(PC pc, PetscBool flg)
 {
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
@@ -112,8 +104,6 @@ PETSC_EXTERN PetscErrorCode PCPatchSetPartitionOfUnity(PC pc, PetscBool flg)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchSetMultiplicative"
 PETSC_EXTERN PetscErrorCode PCPatchSetMultiplicative(PC pc, PetscBool flg)
 {
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
@@ -246,8 +236,6 @@ static PetscErrorCode PCPatchCreateDefaultSF_Private(PC pc, PetscInt n, const Pe
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchSetCellNumbering"
 PETSC_EXTERN PetscErrorCode PCPatchSetCellNumbering(PC pc, PetscSection cellNumbering)
 {
     PetscErrorCode  ierr;
@@ -260,8 +248,6 @@ PETSC_EXTERN PetscErrorCode PCPatchSetCellNumbering(PC pc, PetscSection cellNumb
 }
 
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchSetDiscretisationInfo"
 PETSC_EXTERN PetscErrorCode PCPatchSetDiscretisationInfo(PC pc, PetscInt nsubspaces,
                                                          DM *dms,
                                                          PetscInt *bs,
@@ -303,8 +289,6 @@ PETSC_EXTERN PetscErrorCode PCPatchSetDiscretisationInfo(PC pc, PetscInt nsubspa
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchSetSubMatType"
 PETSC_EXTERN PetscErrorCode PCPatchSetSubMatType(PC pc, MatType sub_mat_type)
 {
     PetscErrorCode ierr;
@@ -317,8 +301,6 @@ PETSC_EXTERN PetscErrorCode PCPatchSetSubMatType(PC pc, MatType sub_mat_type)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchSetComputeOperator"
 PETSC_EXTERN PetscErrorCode PCPatchSetComputeOperator(PC pc, PetscErrorCode (*func)(PC, Mat, PetscInt,
                                                                                     const PetscInt *,
                                                                                     PetscInt,
@@ -336,8 +318,6 @@ PETSC_EXTERN PetscErrorCode PCPatchSetComputeOperator(PC pc, PetscErrorCode (*fu
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchCompleteCellPatch"
 /* On entry, ht contains the topological entities whose dofs we are responsible for solving for;
    on exit, cht contains all the topological entities we need to compute their residuals.
    In full generality this should incorporate knowledge of the sparsity pattern of the matrix;
@@ -378,8 +358,6 @@ static PetscErrorCode PCPatchCompleteCellPatch(DM dm, PetscHashI ht, PetscHashI 
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchGetPointDofs"
 /* Given a hash table with a set of topological entities (pts), compute the degrees of
    freedom in global concatenated numbering on those entities.
    For Vanka smoothing, this needs to do something special: ignore dofs of the
@@ -433,8 +411,6 @@ static PetscErrorCode PCPatchGetPointDofs(PC_PATCH *patch, PetscHashI pts, Petsc
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchComputeSetDifference"
 /* Given two hash tables A and B, compute the keys in B that are not in A, and
    put them in C */
 static PetscErrorCode PCPatchComputeSetDifference(PetscHashI A, PetscHashI B, PetscHashI C)
@@ -459,8 +435,6 @@ static PetscErrorCode PCPatchComputeSetDifference(PetscHashI A, PetscHashI B, Pe
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchCreateCellPatches"
 /*
  * PCPatchCreateCellPatches - create patches of cells around vertices in the mesh.
  *
@@ -580,8 +554,6 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchCreateCellPatchDiscretisationInfo"
 /*
  * PCPatchCreateCellPatchDiscretisationInfo - Build the dof maps for cell patches
  *
@@ -792,8 +764,6 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchCreateCellPatchBCs"
 static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
 {
     PetscErrorCode  ierr;
@@ -939,8 +909,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCReset_PATCH"
 static PetscErrorCode PCReset_PATCH(PC pc)
 {
     PetscErrorCode  ierr;
@@ -1026,8 +994,6 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCDestroy_PATCH"
 static PetscErrorCode PCDestroy_PATCH(PC pc)
 {
     PetscErrorCode  ierr;
@@ -1047,8 +1013,6 @@ static PetscErrorCode PCDestroy_PATCH(PC pc)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchCreateMatrix"
 static PetscErrorCode PCPatchCreateMatrix(PC pc, Vec x, Vec y, Mat *mat)
 {
     PetscErrorCode  ierr;
@@ -1074,8 +1038,6 @@ static PetscErrorCode PCPatchCreateMatrix(PC pc, Vec x, Vec y, Mat *mat)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchComputeOperator"
 static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, Mat multMat, PetscInt which)
 {
     PetscErrorCode  ierr;
@@ -1121,8 +1083,6 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, Mat multMat, PetscI
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatch_ScatterLocal_Private"
 static PetscErrorCode PCPatch_ScatterLocal_Private(PC pc, PetscInt p,
                                                    Vec x, Vec y,
                                                    InsertMode mode,
@@ -1166,8 +1126,6 @@ static PetscErrorCode PCPatch_ScatterLocal_Private(PC pc, PetscInt p,
 }
 
 
-#undef __FUNCT__
-#define __FUNCT__ "PCSetUp_PATCH"
 static PetscErrorCode PCSetUp_PATCH(PC pc)
 {
     PetscErrorCode  ierr;
@@ -1274,8 +1232,6 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCApply_PATCH"
 static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
 {
     PetscErrorCode     ierr;
@@ -1409,8 +1365,6 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCSetUpOnBlocks_PATCH"
 static PetscErrorCode PCSetUpOnBlocks_PATCH(PC pc)
 {
   PC_PATCH           *patch = (PC_PATCH*)pc->data;
@@ -1430,8 +1384,6 @@ static PetscErrorCode PCSetUpOnBlocks_PATCH(PC pc)
   PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchConstruct_Current"
 PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(void *vpatch, DM dm, PetscInt entity, PetscHashI ht)
 {
     PetscErrorCode ierr;
@@ -1490,8 +1442,6 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(void *vpatch, DM dm, PetscI
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCPatchConstruct_Vanka"
 PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(void *vpatch, DM dm, PetscInt entity, PetscHashI ht)
 {
     PetscErrorCode ierr;
@@ -1538,8 +1488,6 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(void *vpatch, DM dm, PetscInt
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCSetFromOptions_PATCH"
 static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObject, PC pc)
 {
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
@@ -1590,8 +1538,6 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCView_PATCH"
 static PetscErrorCode PCView_PATCH(PC pc, PetscViewer viewer)
 {
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
@@ -1641,8 +1587,6 @@ static PetscErrorCode PCView_PATCH(PC pc, PetscViewer viewer)
     PetscFunctionReturn(0);
 }
 
-#undef __FUNCT__
-#define __FUNCT__ "PCCreate_PATCH"
 PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
 {
     PetscErrorCode ierr;
