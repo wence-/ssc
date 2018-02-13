@@ -141,7 +141,7 @@ def matrix_funptr(form):
     return mod._fun, kinfo
 
 
-def bcdofs(bc):
+def bcdofs(bc, ghost=True):
     # Return the global dofs fixed by a DirichletBC
     # in the numbering given by concatenation of all the
     # subspaces of a mixed function space
@@ -158,7 +158,10 @@ def bcdofs(bc):
             assert i == len(indices)-1 # assert we're at the end of the chain
             assert Z.sub(idx).value_size == 1
         elif isinstance(Z.ufl_element(), MixedElement):
-            offset += sum(Z.sub(j).dof_count for j in range(idx))
+            if ghost:
+                offset += sum(Z.sub(j).dof_count for j in range(idx))
+            else:
+                offset += sum(Z.sub(j).dof_dset.size * Z.sub(j).value_size for j in range(idx))
         else:
             raise NotImplementedError("How are you taking a .sub?")
 
@@ -166,10 +169,12 @@ def bcdofs(bc):
 
     bs = Z.value_size
     out = []
-    for node in bc.nodes:
-        for j in range(bs):
-            out.append(node*bs + j + offset)
-    return out
+    nodes = bc.nodes
+    if not ghost:
+        nodes = nodes[nodes < Z.dof_dset.size]
+
+    return numpy.concatenate([nodes*bs + j for j in range(bs)]) + offset
+
 
 def setup_patch_pc(patch, J, bcs):
     patch = PatchPC.PC.cast(patch)
@@ -178,9 +183,11 @@ def setup_patch_pc(patch, J, bcs):
     mesh = V.ufl_domain()
 
     if len(bcs) > 0:
-        bc_nodes = numpy.array(sum((bcdofs(bc) for bc in bcs), []), dtype=PETSc.IntType)
+        ghost_bc_nodes = numpy.unique(numpy.concatenate([bcdofs(bc, ghost=True) for bc in bcs]))
+        global_bc_nodes = numpy.unique(numpy.concatenate([bcdofs(bc, ghost=False) for bc in bcs]))
     else:
-        bc_nodes = numpy.empty(0, dtype=PETSc.IntType)
+        ghost_bc_nodes = numpy.empty(0, dtype=PETSc.IntType)
+        global_bc_nodes = numpy.empty(0, dtype=PETSc.IntType)
 
     op_coeffs = [mesh.coordinates]
     for n in kinfo.coefficient_map:
@@ -206,6 +213,7 @@ def setup_patch_pc(patch, J, bcs):
                                      numpy.array([W.value_size for W in V], dtype=PETSc.IntType),
                                      [W.cell_node_list for W in V],
                                      offsets,
-                                     bc_nodes)
+                                     ghost_bc_nodes,
+                                     global_bc_nodes)
     patch.setPatchComputeOperator(op)
     return patch

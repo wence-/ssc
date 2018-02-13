@@ -40,7 +40,8 @@ typedef struct {
     PetscSection     bcCounts;
     IS               cells;
     IS               dofs;
-    IS               bcNodes;
+    IS               ghostBcNodes;
+    IS               globalBcNodes;
     IS               gtol;
     IS              *bcs;
 
@@ -254,8 +255,10 @@ PETSC_EXTERN PetscErrorCode PCPatchSetDiscretisationInfo(PC pc, PetscInt nsubspa
                                                          PetscInt *nodesPerCell,
                                                          const PetscInt **cellNodeMap,
                                                          const PetscInt *subspaceOffsets,
-                                                         PetscInt numBcs,
-                                                         const PetscInt *bcNodes)
+                                                         PetscInt numGhostBcs,
+                                                         const PetscInt *ghostBcNodes,
+                                                         PetscInt numGlobalBcs,
+                                                         const PetscInt *globalBcNodes)
 {
     PetscErrorCode  ierr;
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
@@ -285,7 +288,8 @@ PETSC_EXTERN PetscErrorCode PCPatchSetDiscretisationInfo(PC pc, PetscInt nsubspa
     ierr = PetscFree(sfs); CHKERRQ(ierr);
 
     patch->subspaceOffsets[nsubspaces] = subspaceOffsets[nsubspaces];
-    ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, bcNodes, PETSC_COPY_VALUES, &patch->bcNodes); CHKERRQ(ierr);
+    ierr = ISCreateGeneral(PETSC_COMM_SELF, numGhostBcs, ghostBcNodes, PETSC_COPY_VALUES, &patch->ghostBcNodes); CHKERRQ(ierr);
+    ierr = ISCreateGeneral(PETSC_COMM_SELF, numGlobalBcs, globalBcNodes, PETSC_COPY_VALUES, &patch->globalBcNodes); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
@@ -790,12 +794,12 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     PetscFunctionBegin;
 
     PetscHashICreate(globalBcs);
-    ierr = ISGetIndices(patch->bcNodes, &bcNodes); CHKERRQ(ierr);
-    ierr = ISGetSize(patch->bcNodes, &numBcs); CHKERRQ(ierr);
+    ierr = ISGetIndices(patch->ghostBcNodes, &bcNodes); CHKERRQ(ierr);
+    ierr = ISGetSize(patch->ghostBcNodes, &numBcs); CHKERRQ(ierr);
     for ( PetscInt i = 0; i < numBcs; i++ ) {
         PetscHashIAdd(globalBcs, bcNodes[i], 0); /* these are already in concatenated numbering */
     }
-    ierr = ISRestoreIndices(patch->bcNodes, &bcNodes); CHKERRQ(ierr);
+    ierr = ISRestoreIndices(patch->ghostBcNodes, &bcNodes); CHKERRQ(ierr);
     PetscHashICreate(patchDofs);
     PetscHashICreate(localBcs);
     PetscHashICreate(multLocalBcs);
@@ -904,6 +908,7 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     PetscHashIDestroy(patchDofs);
     PetscHashIDestroy(globalBcs);
 
+    ierr = ISDestroy(&patch->ghostBcNodes); CHKERRQ(ierr);
     ierr = PetscSectionSetUp(bcCounts); CHKERRQ(ierr);
 
     PetscFunctionReturn(0);
@@ -925,7 +930,8 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     ierr = ISDestroy(&patch->gtol); CHKERRQ(ierr);
     ierr = ISDestroy(&patch->cells); CHKERRQ(ierr);
     ierr = ISDestroy(&patch->dofs); CHKERRQ(ierr);
-    ierr = ISDestroy(&patch->bcNodes); CHKERRQ(ierr);
+    ierr = ISDestroy(&patch->ghostBcNodes); CHKERRQ(ierr);
+    ierr = ISDestroy(&patch->globalBcNodes); CHKERRQ(ierr);
 
     if (patch->dofSection) {
         for (i = 0; i < patch->nsubspaces; i++) {
@@ -936,7 +942,6 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     ierr = PetscFree(patch->bs); CHKERRQ(ierr);
     ierr = PetscFree(patch->nodesPerCell); CHKERRQ(ierr);
     ierr = PetscFree(patch->cellNodeMap); CHKERRQ(ierr);
-    ierr = PetscFree(patch->bcNodes); CHKERRQ(ierr);
 
     if (patch->bcs) {
         for ( i = 0; i < patch->npatch; i++ ) {
@@ -1347,8 +1352,8 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
 
     /* Now we need to send the global BC values through */
     ierr = VecGetArrayRead(x, &globalX); CHKERRQ(ierr);
-    ierr = ISGetSize(patch->bcNodes, &numBcs); CHKERRQ(ierr);
-    ierr = ISGetIndices(patch->bcNodes, &bcNodes); CHKERRQ(ierr);
+    ierr = ISGetSize(patch->globalBcNodes, &numBcs); CHKERRQ(ierr);
+    ierr = ISGetIndices(patch->globalBcNodes, &bcNodes); CHKERRQ(ierr);
     ierr = VecGetLocalSize(x, &size); CHKERRQ(ierr);
     for ( PetscInt i = 0; i < numBcs; i++ ) {
         const PetscInt idx = bcNodes[i];
@@ -1357,7 +1362,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
         }
     }
 
-    ierr = ISRestoreIndices(patch->bcNodes, &bcNodes); CHKERRQ(ierr);
+    ierr = ISRestoreIndices(patch->globalBcNodes, &bcNodes); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
     ierr = PetscOptionsPopGetViewerOff(); CHKERRQ(ierr);

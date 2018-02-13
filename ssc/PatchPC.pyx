@@ -20,6 +20,8 @@ cdef extern from "libssc.h" nogil:
                                      const PetscInt **,
                                      const PetscInt *,
                                      PetscInt,
+                                     const PetscInt *,
+                                     PetscInt,
                                      const PetscInt *)
     int PCPatchSetComputeOperator(PETSc.PetscPC, int (*)(PETSc.PetscPC, PETSc.PetscMat, PetscInt, const PetscInt *, PetscInt, const PetscInt *, void *) except -1, void*)
     int PCCreate_PATCH(PETSc.PetscPC)
@@ -90,10 +92,11 @@ cdef class PC(PETSc.PC):
                                    numpy.ndarray[PetscInt, ndim=1, mode="c"] bs,
                                    cellNodeMaps,
                                    numpy.ndarray[PetscInt, ndim=1, mode="c"] subspaceOffsets,
-                                   numpy.ndarray[PetscInt, ndim=1, mode="c"] bcNodes):
+                                   numpy.ndarray[PetscInt, ndim=1, mode="c"] ghostBcNodes,
+                                   numpy.ndarray[PetscInt, ndim=1, mode="c"] globalBcNodes):
         cdef:
             PetscInt numSubSpaces
-            PetscInt numBcs
+            PetscInt numGhostBcs, numGlobalBcs
             PetscInt *cnodesPerCell = NULL
             const PetscInt **ccellNodeMaps = NULL
             PETSc.PetscDM* cdms = NULL
@@ -102,7 +105,8 @@ cdef class PC(PETSc.PC):
 
 
         numSubSpaces = asInt(bs.shape[0])
-        numBcs = asInt(bcNodes.shape[0])
+        numGhostBcs = asInt(ghostBcNodes.shape[0])
+        numGlobalBcs = asInt(globalBcNodes.shape[0])
 
         CHKERR( PetscMalloc1(numSubSpaces, &cnodesPerCell) )
         CHKERR( PetscMalloc1(numSubSpaces, &cdms) )
@@ -120,8 +124,10 @@ cdef class PC(PETSc.PC):
                                              cnodesPerCell,
                                              ccellNodeMaps,
                                              <const PetscInt *>subspaceOffsets.data,
-                                             numBcs,
-                                             <const PetscInt *>bcNodes.data) )
+                                             numGhostBcs,
+                                             <const PetscInt *>ghostBcNodes.data,
+                                             numGlobalBcs,
+                                             <const PetscInt *>globalBcNodes.data) )
 
         CHKERR ( PetscFree(ccellNodeMaps) )
         CHKERR ( PetscFree(cnodesPerCell) )
