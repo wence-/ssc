@@ -158,7 +158,7 @@ def bcdofs(bc):
             assert i == len(indices)-1 # assert we're at the end of the chain
             assert Z.sub(idx).value_size == 1
         elif isinstance(Z.ufl_element(), MixedElement):
-            offset += sum(Z.sub(j).dim() for j in range(idx))
+            offset += sum(Z.sub(j).dof_count for j in range(idx))
         else:
             raise NotImplementedError("How are you taking a .sub?")
 
@@ -199,11 +199,10 @@ def setup_patch_pc(patch, J, bcs):
                cell_dofmap, cell_dofmap, *op_args)
         mat.assemble()
     patch.setPatchDMPlex(mesh._plex)
-    patch.setPatchDefaultSF(V.dm.getDefaultSF())
     patch.setPatchCellNumbering(mesh._cell_numbering)
 
-    offsets = numpy.append([0], numpy.cumsum([W.dim() for W in V])).astype(PETSc.IntType)
-    patch.setPatchDiscretisationInfo([W.dm.getDefaultSection() for W in V],
+    offsets = numpy.append([0], numpy.cumsum([W.dof_count for W in V])).astype(PETSc.IntType)
+    patch.setPatchDiscretisationInfo([W.dm for W in V],
                                      numpy.array([W.value_size for W in V], dtype=PETSc.IntType),
                                      [W.cell_node_list for W in V],
                                      offsets,
