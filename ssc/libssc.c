@@ -1191,7 +1191,7 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
 
     /* If desired, calculate weights for dof multiplicity */
 
-    if (patch->partition_of_unity) {
+    if (!pc->setupcalled && patch->partition_of_unity) {
         ierr = VecDuplicate(patch->localX, &patch->dof_weights); CHKERRQ(ierr);
         ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
         for ( PetscInt i = 0; i < patch->npatch; i++ ) {
