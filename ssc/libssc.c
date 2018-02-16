@@ -357,8 +357,12 @@ static PetscErrorCode PCPatchCompleteCellPatch(DM dm, PetscHashI ht, PetscHashI 
         }
     }
     /* Only restore work arrays at very end. */
-    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &closure); CHKERRQ(ierr);
-    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, NULL, &star); CHKERRQ(ierr);
+    if (closure) {
+        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &closure); CHKERRQ(ierr);
+    }
+    if (star) {
+        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, NULL, &star); CHKERRQ(ierr);
+    }
     PetscFunctionReturn(0);
 }
 
@@ -1441,9 +1445,15 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(void *vpatch, DM dm, PetscI
             }
         }
     }
-    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &fclosure); CHKERRQ(ierr);
-    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &closure); CHKERRQ(ierr);
-    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, NULL, &star); CHKERRQ(ierr);
+    if (fclosure) {
+        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &fclosure); CHKERRQ(ierr);
+    }
+    if (closure) {
+        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &closure); CHKERRQ(ierr);
+    }
+    if (star) {
+        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, NULL, &star); CHKERRQ(ierr);
+    }
     PetscFunctionReturn(0);
 }
 
@@ -1488,8 +1498,12 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(void *vpatch, DM dm, PetscInt
             PetscHashIAdd(ht, newentity, 0);
         }
     }
-    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &closure); CHKERRQ(ierr);
-    ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, NULL, &star); CHKERRQ(ierr);
+    if (closure) {
+        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &closure); CHKERRQ(ierr);
+    }
+    if (star) {
+        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, NULL, &star); CHKERRQ(ierr);
+    }
     PetscFunctionReturn(0);
 }
 

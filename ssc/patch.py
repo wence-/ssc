@@ -3,14 +3,14 @@ import numpy
 import operator
 
 from firedrake.petsc import PETSc
-from firedrake import VectorElement, MixedElement
+from firedrake import VectorElement, MixedElement, PCBase
 
 from pyop2 import op2
 from pyop2 import base as pyop2
 from pyop2 import sequential as seq
 from pyop2.datatypes import IntType
 
-from ssc import PatchPC
+from ssc import PatchPC as cPatchPC
 
 
 class DenseSparsity(object):
@@ -177,7 +177,7 @@ def bcdofs(bc, ghost=True):
 
 
 def setup_patch_pc(patch, J, bcs):
-    patch = PatchPC.PC.cast(patch)
+    patch = cPatchPC.PC.cast(patch)
     funptr, kinfo = matrix_funptr(J)
     V, _ = map(operator.methodcaller("function_space"), J.arguments())
     mesh = V.ufl_domain()
@@ -217,3 +217,54 @@ def setup_patch_pc(patch, J, bcs):
                                      global_bc_nodes)
     patch.setPatchComputeOperator(op)
     return patch
+
+
+class PatchPC(PCBase):
+
+    def initialize(self, pc):
+        A, P = pc.getOperators()
+        if P.getType() == "python":
+            from firedrake.matrix_free.operators import ImplicitMatrixContext
+            ctx = P.getPythonContext()
+            if ctx is None:
+                raise ValueError("No context found on matrix")
+            if not isinstance(ctx, ImplicitMatrixContext):
+                raise ValueError("Don't know how to get form from %r", ctx)
+            J = ctx.a
+            bcs = ctx.row_bcs
+            if bcs != ctx.col_bcs:
+                raise NotImplementedError("Row and column bcs must match")
+        else:
+            from firedrake.dmhooks import get_appctx
+            from firedrake.solving_utils import _SNESContext
+            ctx = get_appctx(pc.getDM())
+            if ctx is None:
+                raise ValueError("No context found on form")
+            if not isinstance(ctx, _SNESContext):
+                raise ValueError("Don't know how to get form from %r", ctx)
+            J = ctx.Jp or ctx.J
+            bcs = ctx._problem.bcs
+
+        mesh = J.ufl_domain()
+        if mesh.cell_set._extruded:
+            raise NotImplementedError("Not implemented on extruded meshes")
+
+        patch = PETSc.PC().create(comm=pc.comm)
+        patch.setOptionsPrefix(pc.getOptionsPrefix() + "patch_")
+        patch.setOperators(A, P)
+        patch.setType("patch")
+        patch = setup_patch_pc(patch, J, bcs)
+        patch.setFromOptions()
+        self.patch = patch
+
+    def update(self, pc):
+        self.patch.setUp()
+
+    def apply(self, pc, x, y):
+        self.patch.apply(x, y)
+
+    def applyTranspose(self, pc, x, y):
+        self.patch.applyTranspose(x, y)
+
+    def view(self, pc, viewer=None):
+        self.patch.view(pc, viewer=viewer)
