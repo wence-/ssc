@@ -78,6 +78,10 @@ typedef struct {
 
     PetscBool        print_patches; /* Should we print out information about patch construction? */
     PetscBool        symmetrise_sweep; /* Should we sweep forwards->backwards, backwards->forwards? */
+
+    IS              *userIS;
+    PetscInt         nuserIS; /* user-specified index sets to specify the patches */
+    PetscBool        user_patches;
 } PC_PATCH;
 
 PETSC_EXTERN PetscErrorCode PCPatchSetDMPlex(PC pc, DM dm)
@@ -484,7 +488,12 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
     ierr = DMPlexGetChart(dm, &pStart, &pEnd); CHKERRQ(ierr);
     ierr = DMPlexGetHeightStratum(dm, 0, &cStart, &cEnd); CHKERRQ(ierr);
 
-    if (patch->codim < 0) { /* codim unset */
+    if (patch->user_patches) {
+        /* compute patch->nuserIS, patch->userIS here */
+        vStart = 0;
+        vEnd = patch->nuserIS;
+    }
+    else if (patch->codim < 0) { /* codim unset */
         if (patch->dim < 0) { /* dim unset */
             ierr = DMPlexGetDepthStratum(dm, 0, &vStart, &vEnd); CHKERRQ(ierr);
         } else { /* dim set */
@@ -1064,6 +1073,15 @@ static PetscErrorCode PCReset_PATCH(PC pc)
 
     patch->bs = 0;
     patch->cellNodeMap = NULL;
+
+    if (patch->user_patches) {
+        for ( PetscInt i = 0; i < patch->nuserIS; i++ ) {
+            ierr = ISDestroy(&patch->userIS[i]); CHKERRQ(ierr);
+        }
+        PetscFree(patch->userIS);
+        patch->nuserIS = 0;
+    }
+
     PetscFunctionReturn(0);
 }
 
@@ -1604,13 +1622,34 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(void *vpatch, DM dm, PetscInt
     PetscFunctionReturn(0);
 }
 
+/* The user's already set the patches in patch->userIS. Build the hash tables */
+PETSC_EXTERN PetscErrorCode PCPatchConstruct_User(void *vpatch, DM dm, PetscInt entity, PetscHashI ht)
+{
+    PetscErrorCode  ierr;
+    PC_PATCH       *patch = (PC_PATCH*) vpatch;
+    IS              patchis = patch->userIS[entity];
+    PetscInt        size;
+    const PetscInt *patchdata;
+
+    PetscFunctionBegin;
+    PetscHashIClear(ht);
+
+    ierr = ISGetSize(patchis, &size); CHKERRQ(ierr);
+    ierr = ISGetIndices(patchis, &patchdata); CHKERRQ(ierr);
+    for ( PetscInt i = 0; i < size; i++ ) {
+        PetscHashIAdd(ht, patchdata[i], 0);
+    }
+    ierr = ISRestoreIndices(patchis, &patchdata); CHKERRQ(ierr);
+    PetscFunctionReturn(0);
+}
+
 static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObject, PC pc)
 {
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
     PetscErrorCode  ierr;
     PetscBool       flg, dimflg, codimflg;
     char            sub_mat_type[256];
-    const char     *patchConstructionTypes[2]  = {"current", "vanka"};
+    const char     *patchConstructionTypes[3]  = {"current", "vanka", "python"};
     PetscInt        patchConstructionType;
 
     PetscFunctionBegin;
@@ -1641,6 +1680,9 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
             if (!flg) {
                 SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Must set Vanka subspace using -pc_patch_vanka_space when using Vanka");
             }
+        } else if (patchConstructionType == 2) {
+            patch->user_patches = PETSC_TRUE;
+            patch->patchconstructop = PCPatchConstruct_User;
         } else {
             SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Unknown patch construction type");
         }
@@ -1731,6 +1773,9 @@ PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
     patch->patchconstructop   = PCPatchConstruct_Current;
     patch->print_patches      = PETSC_FALSE;
     patch->symmetrise_sweep   = PETSC_FALSE;
+    patch->nuserIS            = 0;
+    patch->userIS             = NULL;
+    patch->user_patches       = PETSC_FALSE;
 
     pc->data                 = (void *)patch;
     pc->ops->apply           = PCApply_PATCH;
