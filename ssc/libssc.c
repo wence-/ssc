@@ -77,6 +77,7 @@ typedef struct {
     PetscInt         vankadim;   /* In Vanka construction, should we eliminate any entities of a certain dimension? */
 
     PetscBool        print_patches; /* Should we print out information about patch construction? */
+    PetscBool        symmetrise_sweep; /* Should we sweep forwards->backwards, backwards->forwards? */
 } PC_PATCH;
 
 PETSC_EXTERN PetscErrorCode PCPatchSetDMPlex(PC pc, DM dm)
@@ -1324,6 +1325,10 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     PetscScalar       *patchX  = NULL;
     const PetscInt    *bcNodes = NULL;
     PetscInt           pStart, numBcs, size;
+    PetscInt           nsweep = 1;
+    const PetscInt     start[2] = {0, patch->npatch-1};
+    const PetscInt     end[2] = {patch->npatch, 0};
+    const PetscInt     inc[2] = {1, -1};
     PetscFunctionBegin;
 
     ierr = PetscLogEventBegin(PC_Patch_Apply, pc, 0, 0, 0); CHKERRQ(ierr);
@@ -1338,84 +1343,93 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
 
     ierr = VecSet(patch->localY, 0.0); CHKERRQ(ierr);
     ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
-    for ( PetscInt i = 0; i < patch->npatch; i++ ) {
-        PetscInt start, len;
-        Mat multMat = NULL;
+    if (patch->symmetrise_sweep) {
+        nsweep = 2;
+    } else {
+        nsweep = 1;
+    }
 
-        ierr = PetscSectionGetDof(patch->gtolCounts, i + pStart, &len); CHKERRQ(ierr);
-        ierr = PetscSectionGetOffset(patch->gtolCounts, i + pStart, &start); CHKERRQ(ierr);
-        if ( len <= 0 ) {
-            /* TODO: Squash out these guys in the setup as well. */
-            continue;
-        }
-        ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-                                            patch->localX, patch->patchX[i],
-                                            INSERT_VALUES,
-                                            SCATTER_FORWARD); CHKERRQ(ierr);
-        /* TODO: Do we need different scatters for X and Y? */
-        ierr = VecGetArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
-        /* Apply bcs to patchX (zero entries) */
-        ierr = ISGetLocalSize(patch->bcs[i], &numBcs); CHKERRQ(ierr);
-        ierr = ISGetIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
-        for ( PetscInt j = 0; j < numBcs; j++ ) {
-            const PetscInt idx = bcNodes[j];
-            patchX[idx] = 0;
-        }
-        ierr = ISRestoreIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
-        ierr = VecRestoreArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
-        if (!patch->save_operators) {
-            Mat mat;
-            ierr = PCPatchCreateMatrix(pc, patch->patchX[i], patch->patchY[i], &mat); CHKERRQ(ierr);
-            if (patch->multiplicative) {
-                ierr = PCPatchCreateMatrix(pc, patch->patchX[i], patch->patchY[i], &multMat); CHKERRQ(ierr);
+    for (PetscInt sweep = 0; sweep < nsweep; sweep++) {
+        for ( PetscInt i = start[sweep]; i < end[sweep]; i += inc[sweep] ) {
+            PetscInt start, len;
+            Mat multMat = NULL;
+
+            ierr = PetscSectionGetDof(patch->gtolCounts, i + pStart, &len); CHKERRQ(ierr);
+            ierr = PetscSectionGetOffset(patch->gtolCounts, i + pStart, &start); CHKERRQ(ierr);
+            if ( len <= 0 ) {
+                /* TODO: Squash out these guys in the setup as well. */
+                continue;
             }
-            /* Populate operator here. */
-            ierr = PCPatchComputeOperator(pc, mat, multMat, i); CHKERRQ(ierr);
-            ierr = KSPSetOperators(patch->ksp[i], mat, mat);
-            /* Drop reference so the KSPSetOperators below will blow it away. */
-            ierr = MatDestroy(&mat); CHKERRQ(ierr);
-        }
-
-        if (patch->save_operators && patch->multiplicative) {
-            multMat = patch->multMat[i];
-        }
-
-        ierr = PetscLogEventBegin(PC_Patch_Solve, pc, 0, 0, 0); CHKERRQ(ierr);
-        ierr = KSPSolve(patch->ksp[i], patch->patchX[i], patch->patchY[i]); CHKERRQ(ierr);
-        ierr = PetscLogEventEnd(PC_Patch_Solve, pc, 0, 0, 0); CHKERRQ(ierr);
-        if (!patch->save_operators) {
-            PC pc;
-            ierr = KSPSetOperators(patch->ksp[i], NULL, NULL); CHKERRQ(ierr);
-            ierr = KSPGetPC(patch->ksp[i], &pc); CHKERRQ(ierr);
-            /* Destroy PC context too, otherwise the factored matrix hangs around. */
-            ierr = PCReset(pc); CHKERRQ(ierr);
-        }
-
-        if(patch->partition_of_unity && patch->multiplicative)
-            ierr = VecPointwiseMult(patch->patchY[i],
-                                    patch->patchY[i],
-                                    patch->patch_dof_weights[i]); CHKERRQ(ierr);
-
-        ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-                                            patch->patchY[i], patch->localY,
-                                            ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
-
-        /* Get the matrix on the patch but with only global bcs applied.
-         * This matrix is then multiplied with the result from the previous solve
-         * to obtain by how much the residual changes. */
-
-        if(patch->multiplicative){
-            ierr = MatMult(multMat, patch->patchY[i], patch->patchX[i]); CHKERRQ(ierr);
-            ierr = VecScale(patch->patchX[i], -1.0); CHKERRQ(ierr);
             ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-                                                patch->patchX[i], patch->localX,
-                                                ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
-        }
+                                                patch->localX, patch->patchX[i],
+                                                INSERT_VALUES,
+                                                SCATTER_FORWARD); CHKERRQ(ierr);
+            /* TODO: Do we need different scatters for X and Y? */
+            ierr = VecGetArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
+            /* Apply bcs to patchX (zero entries) */
+            ierr = ISGetLocalSize(patch->bcs[i], &numBcs); CHKERRQ(ierr);
+            ierr = ISGetIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
+            for ( PetscInt j = 0; j < numBcs; j++ ) {
+                const PetscInt idx = bcNodes[j];
+                patchX[idx] = 0;
+            }
+            ierr = ISRestoreIndices(patch->bcs[i], &bcNodes); CHKERRQ(ierr);
+            ierr = VecRestoreArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
+            if (!patch->save_operators) {
+                Mat mat;
+                ierr = PCPatchCreateMatrix(pc, patch->patchX[i], patch->patchY[i], &mat); CHKERRQ(ierr);
+                if (patch->multiplicative) {
+                    ierr = PCPatchCreateMatrix(pc, patch->patchX[i], patch->patchY[i], &multMat); CHKERRQ(ierr);
+                }
+                /* Populate operator here. */
+                ierr = PCPatchComputeOperator(pc, mat, multMat, i); CHKERRQ(ierr);
+                ierr = KSPSetOperators(patch->ksp[i], mat, mat);
+                /* Drop reference so the KSPSetOperators below will blow it away. */
+                ierr = MatDestroy(&mat); CHKERRQ(ierr);
+            }
 
-        if (patch->multiplicative && !patch->save_operators) {
-            ierr = MatDestroy(&multMat); CHKERRQ(ierr);
+            if (patch->save_operators && patch->multiplicative) {
+                multMat = patch->multMat[i];
+            }
+
+            ierr = PetscLogEventBegin(PC_Patch_Solve, pc, 0, 0, 0); CHKERRQ(ierr);
+            ierr = KSPSolve(patch->ksp[i], patch->patchX[i], patch->patchY[i]); CHKERRQ(ierr);
+            ierr = PetscLogEventEnd(PC_Patch_Solve, pc, 0, 0, 0); CHKERRQ(ierr);
+            if (!patch->save_operators) {
+                PC pc;
+                ierr = KSPSetOperators(patch->ksp[i], NULL, NULL); CHKERRQ(ierr);
+                ierr = KSPGetPC(patch->ksp[i], &pc); CHKERRQ(ierr);
+                /* Destroy PC context too, otherwise the factored matrix hangs around. */
+                ierr = PCReset(pc); CHKERRQ(ierr);
+            }
+
+            if(patch->partition_of_unity && patch->multiplicative)
+                ierr = VecPointwiseMult(patch->patchY[i],
+                                        patch->patchY[i],
+                                        patch->patch_dof_weights[i]); CHKERRQ(ierr);
+
+            ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
+                                                patch->patchY[i], patch->localY,
+                                                ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
+
+            /* Get the matrix on the patch but with only global bcs applied.
+             * This matrix is then multiplied with the result from the previous solve
+             * to obtain by how much the residual changes. */
+
+            if(patch->multiplicative){
+                ierr = MatMult(multMat, patch->patchY[i], patch->patchX[i]); CHKERRQ(ierr);
+                ierr = VecScale(patch->patchX[i], -1.0); CHKERRQ(ierr);
+                ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
+                                                    patch->patchX[i], patch->localX,
+                                                    ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
+            }
+
+            if (patch->multiplicative && !patch->save_operators) {
+                ierr = MatDestroy(&multMat); CHKERRQ(ierr);
+            }
         }
     }
+
     if (patch->partition_of_unity && !patch->multiplicative) {
         /* XXX: should we do this on the global vector? */
         ierr = VecPointwiseMult(patch->localY, patch->localY, patch->dof_weights); CHKERRQ(ierr);
@@ -1634,6 +1648,9 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
     ierr = PetscOptionsBool("-pc_patch_print_patches", "Print out information during patch construction?",
                             "PCSetFromOptions_PATCH", patch->print_patches, &patch->print_patches, &flg); CHKERRQ(ierr);
 
+    ierr = PetscOptionsBool("-pc_patch_symmetrise_sweep", "Go start->end, end->start?",
+                            "PCSetFromOptions_PATCH", patch->symmetrise_sweep, &patch->symmetrise_sweep, &flg); CHKERRQ(ierr);
+
     ierr = PetscOptionsTail(); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
@@ -1707,6 +1724,7 @@ PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
     patch->vankadim           = -1;
     patch->patchconstructop   = PCPatchConstruct_Current;
     patch->print_patches      = PETSC_FALSE;
+    patch->symmetrise_sweep   = PETSC_FALSE;
 
     pc->data                 = (void *)patch;
     pc->ops->apply           = PCApply_PATCH;
