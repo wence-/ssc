@@ -82,6 +82,8 @@ typedef struct {
     IS              *userIS;
     PetscInt         nuserIS; /* user-specified index sets to specify the patches */
     PetscBool        user_patches;
+    PetscErrorCode  (*userpatchconstructionop)(PC, PetscInt*, IS**, void* ctx);
+    void            *userpatchconstructctx;
 } PC_PATCH;
 
 PETSC_EXTERN PetscErrorCode PCPatchSetDMPlex(PC pc, DM dm)
@@ -330,6 +332,17 @@ PETSC_EXTERN PetscErrorCode PCPatchSetComputeOperator(PC pc, PetscErrorCode (*fu
     PetscFunctionReturn(0);
 }
 
+PETSC_EXTERN PetscErrorCode PCPatchSetUserPatchConstructionOperator(PC pc, PetscErrorCode (*func)(PC, PetscInt*, IS**, void*), void* ctx)
+{
+    PC_PATCH *patch = (PC_PATCH *)pc->data;
+
+    PetscFunctionBegin;
+    patch->userpatchconstructionop = func;
+    patch->userpatchconstructctx = ctx;
+
+    PetscFunctionReturn(0);
+}
+
 /* On entry, ht contains the topological entities whose dofs we are responsible for solving for;
    on exit, cht contains all the topological entities we need to compute their residuals.
    In full generality this should incorporate knowledge of the sparsity pattern of the matrix;
@@ -490,6 +503,7 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
 
     if (patch->user_patches) {
         /* compute patch->nuserIS, patch->userIS here */
+        ierr = patch->userpatchconstructionop(pc, &patch->nuserIS, &patch->userIS, patch->userpatchconstructctx); CHKERRQ(ierr);
         vStart = 0;
         vEnd = patch->nuserIS;
     }
