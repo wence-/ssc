@@ -74,6 +74,8 @@ typedef struct {
     PetscInt         dim;   /* only oxne of them can be set */
     PetscInt         vankaspace; /* What's the constraint space, when we're doing Vanka */
     PetscInt         vankadim;   /* In Vanka construction, should we eliminate any entities of a certain dimension? */
+
+    PetscBool        print_patches; /* Should we print out information about patch construction? */
 } PC_PATCH;
 
 PETSC_EXTERN PetscErrorCode PCPatchSetDMPlex(PC pc, DM dm)
@@ -876,6 +878,38 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
         ierr = PCPatchGetPointDofs(patch, seenpts, seendofs, v, -1); CHKERRQ(ierr);
         ierr = PCPatchComputeSetDifference(owneddofs, seendofs, artificialbcs); CHKERRQ(ierr);
 
+        if (patch->print_patches) {
+            MPI_Comm comm = PetscObjectComm((PetscObject)pc);
+            PetscSynchronizedPrintf(comm, "Patch %d: owned dofs:\n", v);
+            PetscHashIIterBegin(owneddofs, hi);
+            while (!PetscHashIIterAtEnd(owneddofs, hi)) {
+                PetscInt globalDof;
+                PetscHashIIterGetKey(owneddofs, hi, globalDof);
+                PetscHashIIterNext(owneddofs, hi);
+                PetscSynchronizedPrintf(comm, "%d ", globalDof);
+            }
+            PetscSynchronizedPrintf(comm, "\n");
+            PetscSynchronizedPrintf(comm, "Patch %d: seen dofs:\n", v);
+            PetscHashIIterBegin(seendofs, hi);
+            while (!PetscHashIIterAtEnd(seendofs, hi)) {
+                PetscInt globalDof;
+                PetscHashIIterGetKey(seendofs, hi, globalDof);
+                PetscHashIIterNext(seendofs, hi);
+                PetscSynchronizedPrintf(comm, "%d ", globalDof);
+            }
+            PetscSynchronizedPrintf(comm, "\n");
+            PetscSynchronizedPrintf(comm, "Patch %d: artificial BCs:\n", v);
+            PetscHashIIterBegin(artificialbcs, hi);
+            while (!PetscHashIIterAtEnd(artificialbcs, hi)) {
+                PetscInt globalDof;
+                PetscHashIIterGetKey(artificialbcs, hi, globalDof);
+                PetscHashIIterNext(artificialbcs, hi);
+                PetscSynchronizedPrintf(comm, "%d ", globalDof);
+            }
+            PetscSynchronizedPrintf(comm, "\n\n");
+            PetscSynchronizedFlush(comm, PETSC_STDOUT);
+        }
+
         PetscHashIIterBegin(artificialbcs, hi);
         while (!PetscHashIIterAtEnd(artificialbcs, hi)) {
             PetscInt globalDof, localDof;
@@ -1553,6 +1587,10 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
     if (flg) {
         ierr = PCPatchSetSubMatType(pc, sub_mat_type); CHKERRQ(ierr);
     }
+
+    ierr = PetscOptionsBool("-pc_patch_print_patches", "Print out information during patch construction?",
+                            "PCSetFromOptions_PATCH", patch->print_patches, &patch->print_patches, &flg); CHKERRQ(ierr);
+
     ierr = PetscOptionsTail(); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
@@ -1625,6 +1663,7 @@ PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
     patch->vankaspace         = -1;
     patch->vankadim           = -1;
     patch->patchconstructop   = PCPatchConstruct_Current;
+    patch->print_patches      = PETSC_FALSE;
 
     pc->data                 = (void *)patch;
     pc->ops->apply           = PCApply_PATCH;
