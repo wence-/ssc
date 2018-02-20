@@ -985,6 +985,12 @@ static PetscErrorCode PCReset_PATCH(PC pc)
         }
         ierr = PetscFree(patch->patchY); CHKERRQ(ierr);
     }
+    if (patch->patch_dof_weights) {
+        for ( i = 0; i < patch->npatch; i++ ) {
+            ierr = VecDestroy(patch->patch_dof_weights + i); CHKERRQ(ierr);
+        }
+        ierr = PetscFree(patch->patch_dof_weights); CHKERRQ(ierr);
+    }
     if (patch->mat) {
         for ( i = 0; i < patch->npatch; i++ ) {
             ierr = MatDestroy(patch->mat + i); CHKERRQ(ierr);
