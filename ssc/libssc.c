@@ -63,6 +63,7 @@ typedef struct {
     Vec              localX, localY;
     Vec              dof_weights; /* In how many patches does each dof lie? */
     Vec             *patchX, *patchY; /* Work vectors for patches */
+    Vec             *patch_dof_weights;
     Mat             *mat;        /* Operators */
     Mat             *multMat;        /* Operators for multiplicative residual calculation */
     MatType          sub_mat_type;
@@ -1163,6 +1164,9 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
         ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, &pEnd); CHKERRQ(ierr);
         ierr = PetscMalloc1(patch->npatch, &patch->patchX); CHKERRQ(ierr);
         ierr = PetscMalloc1(patch->npatch, &patch->patchY); CHKERRQ(ierr);
+        if(patch->partition_of_unity && patch->multiplicative)
+            ierr = PetscMalloc1(patch->npatch, &patch->patch_dof_weights); CHKERRQ(ierr);
+
         for ( PetscInt i = pStart; i < pEnd; i++ ) {
             PetscInt dof;
             ierr = PetscSectionGetDof(patch->gtolCounts, i, &dof); CHKERRQ(ierr);
@@ -1170,6 +1174,10 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
             ierr = VecSetUp(patch->patchX[i - pStart]); CHKERRQ(ierr);
             ierr = VecCreateSeq(PETSC_COMM_SELF, dof, &patch->patchY[i - pStart]); CHKERRQ(ierr);
             ierr = VecSetUp(patch->patchY[i - pStart]); CHKERRQ(ierr);
+            if(patch->partition_of_unity && patch->multiplicative) {
+                ierr = VecCreateSeq(PETSC_COMM_SELF, dof, &patch->patch_dof_weights[i - pStart]); CHKERRQ(ierr);
+                ierr = VecSetUp(patch->patch_dof_weights[i - pStart]); CHKERRQ(ierr);
+            }
         }
         ierr = PetscMalloc1(patch->npatch, &patch->ksp); CHKERRQ(ierr);
         ierr = PCGetOptionsPrefix(pc, &prefix); CHKERRQ(ierr);
@@ -1220,6 +1228,14 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
                                                 ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
         }
         ierr = VecReciprocal(patch->dof_weights); CHKERRQ(ierr);
+        if(patch->partition_of_unity && patch->multiplicative)
+        {
+            for ( PetscInt i = 0; i < patch->npatch; i++ ) {
+                ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
+                                                    patch->dof_weights, patch->patch_dof_weights[i],
+                                                    INSERT_VALUES, SCATTER_FORWARD); CHKERRQ(ierr);
+            }
+        }
     }
 
     if (patch->save_operators) {
@@ -1319,6 +1335,11 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
             ierr = PCReset(pc); CHKERRQ(ierr);
         }
 
+        if(patch->partition_of_unity && patch->multiplicative)
+            ierr = VecPointwiseMult(patch->patchY[i],
+                                    patch->patchY[i],
+                                    patch->patch_dof_weights[i]); CHKERRQ(ierr);
+
         ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
                                             patch->patchY[i], patch->localY,
                                             ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
@@ -1339,7 +1360,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
             ierr = MatDestroy(&multMat); CHKERRQ(ierr);
         }
     }
-    if (patch->partition_of_unity) {
+    if (patch->partition_of_unity && !patch->multiplicative) {
         /* XXX: should we do this on the global vector? */
         ierr = VecPointwiseMult(patch->localY, patch->localY, patch->dof_weights); CHKERRQ(ierr);
     }
