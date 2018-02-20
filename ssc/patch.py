@@ -175,6 +175,17 @@ def bcdofs(bc, ghost=True):
 
     return numpy.concatenate([nodes*bs + j for j in range(bs)]) + offset
 
+def user_construction_op(pc, *args, **kwargs):
+    from firedrake.dmhooks import get_appctx
+    prefix = pc.getOptionsPrefix()
+    usercode = PETSc.Options(prefix).getString("pc_patch_construction_python_type", default="arghistherenootherway")
+    if usercode == "arghistherenootherway": raise ValueError("Must set %spc_patch_construction_python_type" % prefix)
+
+    (modname, funname) = usercode.rsplit('.', 1)
+    mod = __import__(modname)
+    fun = getattr(mod, funname)
+    dm = pc.getDM()
+    return fun(dm)
 
 def setup_patch_pc(patch, J, bcs):
     patch = cPatchPC.PC.cast(patch)
@@ -216,6 +227,7 @@ def setup_patch_pc(patch, J, bcs):
                                      ghost_bc_nodes,
                                      global_bc_nodes)
     patch.setPatchComputeOperator(op)
+    patch.setPatchUserConstructionOperator(user_construction_op)
     return patch
 
 
@@ -253,6 +265,7 @@ class PatchPC(PCBase):
         patch.setOptionsPrefix(pc.getOptionsPrefix() + "patch_")
         patch.setOperators(A, P)
         patch.setType("patch")
+        patch.setDM(ctx.appctx['state'].function_space().mesh()._plex)
         patch = setup_patch_pc(patch, J, bcs)
         patch.setFromOptions()
         self.patch = patch

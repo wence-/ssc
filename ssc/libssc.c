@@ -957,17 +957,20 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
             PetscHashIDestroy(globalbcdofs);
         }
 
-        PetscHashIIterBegin(artificialbcs, hi);
-        while (!PetscHashIIterAtEnd(artificialbcs, hi)) {
-            PetscInt globalDof, localDof;
-            PetscHashIIterGetKey(artificialbcs, hi, globalDof);
-            PetscHashIIterNext(artificialbcs, hi);
-            PetscHashIMap(patchDofs, globalDof, localDof);
-            if ( localDof == -1 ) {
-                SETERRQ2(PETSC_COMM_SELF, PETSC_ERR_ARG_OUTOFRANGE,
-                         "Patch %d Didn't find dof %d in patch\n", v - vStart, globalDof);
+        PetscHashISize(artificialbcs, numBcs);
+        if (numBcs > 0) {
+            PetscHashIIterBegin(artificialbcs, hi);
+            while (!PetscHashIIterAtEnd(artificialbcs, hi)) {
+                PetscInt globalDof, localDof;
+                PetscHashIIterGetKey(artificialbcs, hi, globalDof);
+                PetscHashIIterNext(artificialbcs, hi);
+                PetscHashIMap(patchDofs, globalDof, localDof);
+                if ( localDof == -1 ) {
+                    SETERRQ2(PETSC_COMM_SELF, PETSC_ERR_ARG_OUTOFRANGE,
+                             "Patch %d Didn't find dof %d in patch\n", v - vStart, globalDof);
+                }
+                PetscHashIAdd(localBcs, localDof, 0);
             }
-            PetscHashIAdd(localBcs, localDof, 0);
         }
 
         /* OK, now we have a hash table with all the bcs indicated by
@@ -1643,14 +1646,21 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_User(void *vpatch, DM dm, PetscInt 
     PC_PATCH       *patch = (PC_PATCH*) vpatch;
     IS              patchis = patch->userIS[entity];
     PetscInt        size;
+    PetscInt        pStart, pEnd;
     const PetscInt *patchdata;
 
     PetscFunctionBegin;
     PetscHashIClear(ht);
 
+    ierr = DMPlexGetChart(dm, &pStart, &pEnd);
+
     ierr = ISGetSize(patchis, &size); CHKERRQ(ierr);
     ierr = ISGetIndices(patchis, &patchdata); CHKERRQ(ierr);
     for ( PetscInt i = 0; i < size; i++ ) {
+        PetscInt ownedentity = patchdata[i];
+        if (ownedentity < pStart || ownedentity >= pEnd) {
+            SETERRQ(PetscObjectComm((PetscObject)dm),PETSC_ERR_USER,"Entities need to be between the bounds of DMPlexGetChart()");
+        }
         PetscHashIAdd(ht, patchdata[i], 0);
     }
     ierr = ISRestoreIndices(patchis, &patchdata); CHKERRQ(ierr);
@@ -1683,7 +1693,7 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
     if (dimflg && codimflg) {
         SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Can only set one of dimension or co-dimension");
     }
-    ierr = PetscOptionsEList("-pc_patch_construction_type", "How should the patches be constructed?", "PCSetFromOptions_PATCH", patchConstructionTypes, 2, patchConstructionTypes[0], &patchConstructionType, &flg);
+    ierr = PetscOptionsEList("-pc_patch_construction_type", "How should the patches be constructed?", "PCSetFromOptions_PATCH", patchConstructionTypes, 3, patchConstructionTypes[0], &patchConstructionType, &flg);
     if (flg) {
         if (patchConstructionType == 0) {
             patch->patchconstructop = PCPatchConstruct_Current;

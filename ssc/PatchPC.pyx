@@ -24,6 +24,7 @@ cdef extern from "libssc.h" nogil:
                                      PetscInt,
                                      const PetscInt *)
     int PCPatchSetComputeOperator(PETSc.PetscPC, int (*)(PETSc.PetscPC, PETSc.PetscMat, PetscInt, const PetscInt *, PetscInt, const PetscInt *, void *) except -1, void*)
+    int PCPatchSetUserPatchConstructionOperator(PETSc.PetscPC, int (*)(PETSc.PetscPC, PetscInt*, PETSc.PetscIS**, void *) except -1, void*)
     int PCCreate_PATCH(PETSc.PetscPC)
     int PetscObjectReference(void *)
     int PCPatchInitializePackage()
@@ -71,6 +72,28 @@ cdef int PCPatch_ComputeOperator(
     assert context is not None and type(context) is tuple
     (op, args, kargs) = context
     op(Pc, Mat, ncell, <uintptr_t>cells, <uintptr_t>dofmap, *args, **kargs)
+
+cdef int PCPatch_UserPatchConstructionOperator(
+    PETSc.PetscPC pc,
+    PetscInt *nuserIS,
+    PETSc.PetscIS **userIS,
+    void *ctx) except -1 with gil:
+    cdef PETSc.PC Pc = PETSc.PC()
+    cdef PetscInt i
+    Pc.pc = pc
+    CHKERR( PetscObjectReference(<void*>pc) )
+    cdef object context = Pc.get_attr("__patch_construction_operator__")
+    if context is None and ctx != NULL: context = <object>ctx
+    assert context is not None and type(context) is tuple
+    (op, args, kargs) = context
+    puserISs = op(Pc, *args, **kargs)
+
+    nuserIS[0] = len(puserISs)
+    CHKERR( PetscMalloc1(nuserIS[0], userIS) )
+
+    for i from 0 <= i < nuserIS[0]:
+        userIS[0][i] = (<PETSc.IS?>puserISs[i]).iset
+        CHKERR( PetscObjectReference(<void*>userIS[0][i]) )
 
 
 cdef class PC(PETSc.PC):
@@ -140,5 +163,11 @@ cdef class PC(PETSc.PC):
         self.set_attr("__compute_operator__", context)
         CHKERR( PCPatchSetComputeOperator(self.pc, PCPatch_ComputeOperator, <void *>context) )
 
+    def setPatchUserConstructionOperator(self, operator, args=None, kargs=None):
+        if args  is None: args  = ()
+        if kargs is None: kargs = {}
+        context = (operator, args, kargs)
+        self.set_attr("__patch_construction_operator__", context)
+        CHKERR( PCPatchSetUserPatchConstructionOperator(self.pc, PCPatch_UserPatchConstructionOperator, <void *>context) )
 
 PCPatchInitializePackage()
