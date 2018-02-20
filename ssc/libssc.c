@@ -879,35 +879,57 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
         ierr = PCPatchComputeSetDifference(owneddofs, seendofs, artificialbcs); CHKERRQ(ierr);
 
         if (patch->print_patches) {
+            PetscHashI globalbcdofs;
+            PetscHashICreate(globalbcdofs);
+
             MPI_Comm comm = PetscObjectComm((PetscObject)pc);
-            PetscSynchronizedPrintf(comm, "Patch %d: owned dofs:\n", v);
+            ierr = PetscSynchronizedPrintf(comm, "Patch %d: owned dofs:\n", v); CHKERRQ(ierr);
             PetscHashIIterBegin(owneddofs, hi);
             while (!PetscHashIIterAtEnd(owneddofs, hi)) {
                 PetscInt globalDof;
+
                 PetscHashIIterGetKey(owneddofs, hi, globalDof);
                 PetscHashIIterNext(owneddofs, hi);
-                PetscSynchronizedPrintf(comm, "%d ", globalDof);
+                ierr = PetscSynchronizedPrintf(comm, "%d ", globalDof); CHKERRQ(ierr);
             }
-            PetscSynchronizedPrintf(comm, "\n");
-            PetscSynchronizedPrintf(comm, "Patch %d: seen dofs:\n", v);
+            ierr = PetscSynchronizedPrintf(comm, "\n"); CHKERRQ(ierr);
+            ierr = PetscSynchronizedPrintf(comm, "Patch %d: seen dofs:\n", v); CHKERRQ(ierr);
             PetscHashIIterBegin(seendofs, hi);
             while (!PetscHashIIterAtEnd(seendofs, hi)) {
                 PetscInt globalDof;
+                PetscBool flg;
+
                 PetscHashIIterGetKey(seendofs, hi, globalDof);
                 PetscHashIIterNext(seendofs, hi);
-                PetscSynchronizedPrintf(comm, "%d ", globalDof);
+                ierr = PetscSynchronizedPrintf(comm, "%d ", globalDof); CHKERRQ(ierr);
+
+                PetscHashIHasKey(globalBcs, globalDof, flg);
+                if (flg) {
+                    PetscHashIAdd(globalbcdofs, globalDof, 0);
+                }
             }
-            PetscSynchronizedPrintf(comm, "\n");
-            PetscSynchronizedPrintf(comm, "Patch %d: artificial BCs:\n", v);
+            ierr = PetscSynchronizedPrintf(comm, "\n"); CHKERRQ(ierr);
+            ierr = PetscSynchronizedPrintf(comm, "Patch %d: global BCs:\n", v); CHKERRQ(ierr);
+            PetscHashIIterBegin(globalbcdofs, hi);
+            while (!PetscHashIIterAtEnd(globalbcdofs, hi)) {
+                PetscInt globalDof;
+                PetscHashIIterGetKey(globalbcdofs, hi, globalDof);
+                PetscHashIIterNext(globalbcdofs, hi);
+                ierr = PetscSynchronizedPrintf(comm, "%d ", globalDof); CHKERRQ(ierr);
+            }
+            ierr = PetscSynchronizedPrintf(comm, "\n"); CHKERRQ(ierr);
+            ierr = PetscSynchronizedPrintf(comm, "Patch %d: artificial BCs:\n", v); CHKERRQ(ierr);
             PetscHashIIterBegin(artificialbcs, hi);
             while (!PetscHashIIterAtEnd(artificialbcs, hi)) {
                 PetscInt globalDof;
                 PetscHashIIterGetKey(artificialbcs, hi, globalDof);
                 PetscHashIIterNext(artificialbcs, hi);
-                PetscSynchronizedPrintf(comm, "%d ", globalDof);
+                ierr = PetscSynchronizedPrintf(comm, "%d ", globalDof); CHKERRQ(ierr);
             }
-            PetscSynchronizedPrintf(comm, "\n\n");
-            PetscSynchronizedFlush(comm, PETSC_STDOUT);
+            ierr = PetscSynchronizedPrintf(comm, "\n\n"); CHKERRQ(ierr);
+            ierr = PetscSynchronizedFlush(comm, PETSC_STDOUT); CHKERRQ(ierr);
+
+            PetscHashIDestroy(globalbcdofs);
         }
 
         PetscHashIIterBegin(artificialbcs, hi);
