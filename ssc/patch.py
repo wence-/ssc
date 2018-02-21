@@ -283,7 +283,7 @@ class PatchPC(PCBase):
         self.patch.applyTranspose(x, y)
 
     def view(self, pc, viewer=None):
-        self.patch.view(pc, viewer=viewer)
+        self.patch.view(viewer=viewer)
 
 class LineSmoother(object):
     @staticmethod
