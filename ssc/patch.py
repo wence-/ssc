@@ -176,6 +176,19 @@ def bcdofs(bc, ghost=True):
     return numpy.concatenate([nodes*bs + j for j in range(bs)]) + offset
 
 
+def user_construction_op(pc, *args, **kwargs):
+    prefix = pc.getOptionsPrefix()
+    sentinel = object()
+    usercode = PETSc.Options(prefix).getString("pc_patch_construction_python_type", default=sentinel)
+    if usercode == sentinel:
+        raise ValueError("Must set %spc_patch_construction_python_type" % prefix)
+
+    (modname, funname) = usercode.rsplit('.', 1)
+    mod = __import__(modname)
+    fun = getattr(mod, funname)
+    return fun(pc, *args, **kwargs)
+
+
 def setup_patch_pc(patch, J, bcs):
     patch = cPatchPC.PC.cast(patch)
     funptr, kinfo = matrix_funptr(J)
@@ -205,7 +218,7 @@ def setup_patch_pc(patch, J, bcs):
         funptr(0, ncell, cells, mat.handle,
                cell_dofmap, cell_dofmap, *op_args)
         mat.assemble()
-    patch.setPatchDMPlex(mesh._plex)
+    patch.setDM(mesh._plex)
     patch.setPatchCellNumbering(mesh._cell_numbering)
 
     offsets = numpy.append([0], numpy.cumsum([W.dof_count for W in V])).astype(PETSc.IntType)
@@ -216,6 +229,7 @@ def setup_patch_pc(patch, J, bcs):
                                      ghost_bc_nodes,
                                      global_bc_nodes)
     patch.setPatchComputeOperator(op)
+    patch.setPatchUserConstructionOperator(user_construction_op)
     return patch
 
 

@@ -26,9 +26,6 @@ PETSC_EXTERN PetscErrorCode PCPatchInitializePackage(void)
 }
 
 typedef struct {
-    DM              dm;         /* DMPlex object describing mesh
-                                 * topology (need not be the same as
-                                 * PC's DM) */
     PetscSF          defaultSF;
     PetscSection    *dofSection;
     PetscSection     cellCounts;
@@ -78,18 +75,13 @@ typedef struct {
 
     PetscBool        print_patches; /* Should we print out information about patch construction? */
     PetscBool        symmetrise_sweep; /* Should we sweep forwards->backwards, backwards->forwards? */
+
+    IS              *userIS;
+    PetscInt         nuserIS; /* user-specified index sets to specify the patches */
+    PetscBool        user_patches;
+    PetscErrorCode  (*userpatchconstructionop)(PC, PetscInt*, IS**, void* ctx);
+    void            *userpatchconstructctx;
 } PC_PATCH;
-
-PETSC_EXTERN PetscErrorCode PCPatchSetDMPlex(PC pc, DM dm)
-{
-    PetscErrorCode  ierr;
-    PC_PATCH       *patch = (PC_PATCH *)pc->data;
-    PetscFunctionBegin;
-
-    patch->dm = dm;
-    ierr = PetscObjectReference((PetscObject)dm); CHKERRQ(ierr);
-    PetscFunctionReturn(0);
-}
 
 PETSC_EXTERN PetscErrorCode PCPatchSetSaveOperators(PC pc, PetscBool flg)
 {
@@ -326,6 +318,17 @@ PETSC_EXTERN PetscErrorCode PCPatchSetComputeOperator(PC pc, PetscErrorCode (*fu
     PetscFunctionReturn(0);
 }
 
+PETSC_EXTERN PetscErrorCode PCPatchSetUserPatchConstructionOperator(PC pc, PetscErrorCode (*func)(PC, PetscInt*, IS**, void*), void* ctx)
+{
+    PC_PATCH *patch = (PC_PATCH *)pc->data;
+
+    PetscFunctionBegin;
+    patch->userpatchconstructionop = func;
+    patch->userpatchconstructctx = ctx;
+
+    PetscFunctionReturn(0);
+}
+
 /* On entry, ht contains the topological entities whose dofs we are responsible for solving for;
    on exit, cht contains all the topological entities we need to compute their residuals.
    In full generality this should incorporate knowledge of the sparsity pattern of the matrix;
@@ -477,14 +480,26 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
     PetscHashICreate(ht);
     PetscHashICreate(cht);
 
-    dm = patch->dm;
+    ierr = PCGetDM(pc, &dm); CHKERRQ(ierr);
+
     if (!dm) {
         SETERRQ(PetscObjectComm((PetscObject)pc), PETSC_ERR_ARG_WRONGSTATE, "DM not yet set on patch PC\n");
+    }
+
+    ierr = PetscObjectTypeCompare((PetscObject)dm, DMPLEX, &flg); CHKERRQ(ierr);
+    if (!flg) {
+        SETERRQ(PetscObjectComm((PetscObject)pc), PETSC_ERR_ARG_WRONGSTATE, "DM on patch PC must be DMPlex\n");
     }
     ierr = DMPlexGetChart(dm, &pStart, &pEnd); CHKERRQ(ierr);
     ierr = DMPlexGetHeightStratum(dm, 0, &cStart, &cEnd); CHKERRQ(ierr);
 
-    if (patch->codim < 0) { /* codim unset */
+    if (patch->user_patches) {
+        /* compute patch->nuserIS, patch->userIS here */
+        ierr = patch->userpatchconstructionop(pc, &patch->nuserIS, &patch->userIS, patch->userpatchconstructctx); CHKERRQ(ierr);
+        vStart = 0;
+        vEnd = patch->nuserIS;
+    }
+    else if (patch->codim < 0) { /* codim unset */
         if (patch->dim < 0) { /* dim unset */
             ierr = DMPlexGetDepthStratum(dm, 0, &vStart, &vEnd); CHKERRQ(ierr);
         } else { /* dim set */
@@ -780,7 +795,7 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
 {
     PetscErrorCode  ierr;
     PC_PATCH       *patch      = (PC_PATCH *)pc->data;
-    DM              dm         = patch->dm;
+    DM              dm         = NULL;
     PetscInt        numBcs;
     const PetscInt *bcNodes    = NULL;
     PetscSection    gtolCounts = patch->gtolCounts;
@@ -801,6 +816,7 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     const PetscInt *gtolArray;
     PetscFunctionBegin;
 
+    ierr = PCGetDM(pc, &dm); CHKERRQ(ierr);
     PetscHashICreate(globalBcs);
     ierr = ISGetIndices(patch->ghostBcNodes, &bcNodes); CHKERRQ(ierr);
     ierr = ISGetSize(patch->ghostBcNodes, &numBcs); CHKERRQ(ierr);
@@ -934,17 +950,20 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
             PetscHashIDestroy(globalbcdofs);
         }
 
-        PetscHashIIterBegin(artificialbcs, hi);
-        while (!PetscHashIIterAtEnd(artificialbcs, hi)) {
-            PetscInt globalDof, localDof;
-            PetscHashIIterGetKey(artificialbcs, hi, globalDof);
-            PetscHashIIterNext(artificialbcs, hi);
-            PetscHashIMap(patchDofs, globalDof, localDof);
-            if ( localDof == -1 ) {
-                SETERRQ2(PETSC_COMM_SELF, PETSC_ERR_ARG_OUTOFRANGE,
-                         "Patch %d Didn't find dof %d in patch\n", v - vStart, globalDof);
+        PetscHashISize(artificialbcs, numBcs);
+        if (numBcs > 0) {
+            PetscHashIIterBegin(artificialbcs, hi);
+            while (!PetscHashIIterAtEnd(artificialbcs, hi)) {
+                PetscInt globalDof, localDof;
+                PetscHashIIterGetKey(artificialbcs, hi, globalDof);
+                PetscHashIIterNext(artificialbcs, hi);
+                PetscHashIMap(patchDofs, globalDof, localDof);
+                if ( localDof == -1 ) {
+                    SETERRQ2(PETSC_COMM_SELF, PETSC_ERR_ARG_OUTOFRANGE,
+                             "Patch %d Didn't find dof %d in patch\n", v - vStart, globalDof);
+                }
+                PetscHashIAdd(localBcs, localDof, 0);
             }
-            PetscHashIAdd(localBcs, localDof, 0);
         }
 
         /* OK, now we have a hash table with all the bcs indicated by
@@ -983,7 +1002,6 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     PetscInt        i;
 
     PetscFunctionBegin;
-    ierr = DMDestroy(&patch->dm); CHKERRQ(ierr);
     ierr = PetscSFDestroy(&patch->defaultSF); CHKERRQ(ierr);
     ierr = PetscSectionDestroy(&patch->cellCounts); CHKERRQ(ierr);
     ierr = PetscSectionDestroy(&patch->cellNumbering); CHKERRQ(ierr);
@@ -1064,6 +1082,15 @@ static PetscErrorCode PCReset_PATCH(PC pc)
 
     patch->bs = 0;
     patch->cellNodeMap = NULL;
+
+    if (patch->user_patches) {
+        for ( PetscInt i = 0; i < patch->nuserIS; i++ ) {
+            ierr = ISDestroy(&patch->userIS[i]); CHKERRQ(ierr);
+        }
+        PetscFree(patch->userIS);
+        patch->nuserIS = 0;
+    }
+
     PetscFunctionReturn(0);
 }
 
@@ -1490,7 +1517,7 @@ static PetscErrorCode PCSetUpOnBlocks_PATCH(PC pc)
   PetscFunctionReturn(0);
 }
 
-PETSC_EXTERN PetscErrorCode PCPatchConstruct_Current(void *vpatch, DM dm, PetscInt entity, PetscHashI ht)
+PETSC_EXTERN PetscErrorCode PCPatchConstruct_Star(void *vpatch, DM dm, PetscInt entity, PetscHashI ht)
 {
     PetscErrorCode ierr;
     PetscInt       starSize, closureSize, fclosureSize;
@@ -1604,14 +1631,43 @@ PETSC_EXTERN PetscErrorCode PCPatchConstruct_Vanka(void *vpatch, DM dm, PetscInt
     PetscFunctionReturn(0);
 }
 
+/* The user's already set the patches in patch->userIS. Build the hash tables */
+PETSC_EXTERN PetscErrorCode PCPatchConstruct_User(void *vpatch, DM dm, PetscInt entity, PetscHashI ht)
+{
+    PetscErrorCode  ierr;
+    PC_PATCH       *patch = (PC_PATCH*) vpatch;
+    IS              patchis = patch->userIS[entity];
+    PetscInt        size;
+    PetscInt        pStart, pEnd;
+    const PetscInt *patchdata;
+
+    PetscFunctionBegin;
+    PetscHashIClear(ht);
+
+    ierr = DMPlexGetChart(dm, &pStart, &pEnd);
+
+    ierr = ISGetLocalSize(patchis, &size); CHKERRQ(ierr);
+    ierr = ISGetIndices(patchis, &patchdata); CHKERRQ(ierr);
+    for ( PetscInt i = 0; i < size; i++ ) {
+        PetscInt ownedentity = patchdata[i];
+        if (ownedentity < pStart || ownedentity >= pEnd) {
+            SETERRQ(PetscObjectComm((PetscObject)dm),PETSC_ERR_USER,"Entities need to be between the bounds of DMPlexGetChart()");
+        }
+        PetscHashIAdd(ht, patchdata[i], 0);
+    }
+    ierr = ISRestoreIndices(patchis, &patchdata); CHKERRQ(ierr);
+    PetscFunctionReturn(0);
+}
+
+const char *const PCPatchConstructTypes[]   = {"star","vanka","user","python",0};
+
 static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObject, PC pc)
 {
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
     PetscErrorCode  ierr;
     PetscBool       flg, dimflg, codimflg;
     char            sub_mat_type[256];
-    const char     *patchConstructionTypes[2]  = {"current", "vanka"};
-    PetscInt        patchConstructionType;
+    PCPatchConstructType patchConstructionType = PC_PATCH_STAR;
 
     PetscFunctionBegin;
     ierr = PetscOptionsHead(PetscOptionsObject, "Vertex-patch Additive Schwarz options"); CHKERRQ(ierr);
@@ -1630,19 +1686,29 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
     if (dimflg && codimflg) {
         SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Can only set one of dimension or co-dimension");
     }
-    ierr = PetscOptionsEList("-pc_patch_construction_type", "How should the patches be constructed?", "PCSetFromOptions_PATCH", patchConstructionTypes, 2, patchConstructionTypes[0], &patchConstructionType, &flg);
+    /* XXX: This should be PetscOptionsEnum */
+    ierr = PetscOptionsEList("-pc_patch_construction_type", "How should the patches be constructed?", "PCSetFromOptions_PATCH", PCPatchConstructTypes, 4, PCPatchConstructTypes[patchConstructionType], (PetscInt *)&patchConstructionType, &flg);
     if (flg) {
-        if (patchConstructionType == 0) {
-            patch->patchconstructop = PCPatchConstruct_Current;
-        } else if (patchConstructionType == 1) {
+        switch (patchConstructionType) {
+        case PC_PATCH_STAR:
+            patch->patchconstructop = PCPatchConstruct_Star;
+            break;
+        case PC_PATCH_VANKA:
             patch->patchconstructop = PCPatchConstruct_Vanka;
             ierr = PetscOptionsInt("-pc_patch_vanka_dim", "Topological dimension of entities for Vanka to ignore", "PCSetFromOptions_PATCH", patch->vankadim, &patch->vankadim, &flg);
             ierr = PetscOptionsInt("-pc_patch_vanka_space", "What subspace is the constraint space for Vanka?", "PCSetFromOptions_PATCH", patch->vankaspace, &patch->vankaspace, &flg);
             if (!flg) {
                 SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Must set Vanka subspace using -pc_patch_vanka_space when using Vanka");
             }
-        } else {
+            break;
+        case PC_PATCH_USER:
+        case PC_PATCH_PYTHON:
+            patch->user_patches = PETSC_TRUE;
+            patch->patchconstructop = PCPatchConstruct_User;
+            break;
+        default:
             SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Unknown patch construction type");
+            break;
         }
     }
 
@@ -1683,13 +1749,6 @@ static PetscErrorCode PCView_PATCH(PC pc, PetscViewer viewer)
         ierr = PetscViewerASCIIPrintf(viewer, "Saving patch operators (rebuilt every PCSetUp)\n"); CHKERRQ(ierr);
     }
     ierr = PetscViewerASCIIPrintf(viewer, "DM used to define patches:\n"); CHKERRQ(ierr);
-    ierr = PetscViewerASCIIPushTab(viewer); CHKERRQ(ierr);
-    if (patch->dm) {
-        ierr = DMView(patch->dm, viewer); CHKERRQ(ierr);
-    } else {
-        ierr = PetscViewerASCIIPrintf(viewer, "DM not yet set.\n"); CHKERRQ(ierr);
-    }
-    ierr = PetscViewerASCIIPopTab(viewer); CHKERRQ(ierr);
     ierr = PetscViewerASCIIPrintf(viewer, "KSP on patches (all same):\n"); CHKERRQ(ierr);
 
     if (patch->ksp) {
@@ -1728,9 +1787,12 @@ PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
     patch->dim                = -1;
     patch->vankaspace         = -1;
     patch->vankadim           = -1;
-    patch->patchconstructop   = PCPatchConstruct_Current;
+    patch->patchconstructop   = PCPatchConstruct_Star;
     patch->print_patches      = PETSC_FALSE;
     patch->symmetrise_sweep   = PETSC_FALSE;
+    patch->nuserIS            = 0;
+    patch->userIS             = NULL;
+    patch->user_patches       = PETSC_FALSE;
 
     pc->data                 = (void *)patch;
     pc->ops->apply           = PCApply_PATCH;
