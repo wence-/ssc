@@ -13,7 +13,6 @@ cdef extern from "petsc.h" nogil:
     int PetscFree(void*)
 
 cdef extern from "libssc.h" nogil:
-    int PCPatchSetDMPlex(PETSc.PetscPC, PETSc.PetscDM)
     int PCPatchSetCellNumbering(PETSc.PetscPC, PETSc.PetscSection)
     int PCPatchSetDiscretisationInfo(PETSc.PetscPC, PetscInt, PETSc.PetscDM *,
                                      PetscInt *, PetscInt *,
@@ -104,9 +103,6 @@ cdef class PC(PETSc.PC):
         pc.pc = input.pc
         CHKERR( PetscObjectReference(<void *>pc.pc) )
         return pc
-
-    def setPatchDMPlex(self, PETSc.DM dm not None):
-        CHKERR( PCPatchSetDMPlex(self.pc, dm.dm) )
 
     def setPatchCellNumbering(self, PETSc.Section sec not None):
         CHKERR( PCPatchSetCellNumbering(self.pc, sec.sec) )
