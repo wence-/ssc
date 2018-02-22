@@ -1175,7 +1175,7 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, Mat multMat, PetscI
 
     /* Apply boundary conditions.  Could also do this through the local_to_patch guy. */
     if (patch->multiplicative) {
-        ierr = MatCopy(mat, multMat, SAME_NONZERO_PATTERN); CHKERRQ(ierr);
+        ierr = MatCopy(mat, multMat, DIFFERENT_NONZERO_PATTERN); CHKERRQ(ierr);
         ierr = MatZeroRowsColumnsIS(multMat, patch->multBcs[which-pStart], (PetscScalar)1.0, NULL, NULL); CHKERRQ(ierr);
     }
     ierr = MatZeroRowsColumnsIS(mat, patch->bcs[which-pStart], (PetscScalar)1.0, NULL, NULL); CHKERRQ(ierr);

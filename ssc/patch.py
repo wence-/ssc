@@ -301,7 +301,10 @@ class LineSmoother(object):
 
         minx = min(entities, key=lambda z: z[1][axis])[1][axis]
         maxx = max(entities, key=lambda z: z[1][axis])[1][axis]
-        s = sorted(entities, key=lambda z: z[1][axis], reverse=(dir==-1))
+        def keyfunc(z):
+            coords = tuple(z[1])
+            return (coords[axis], ) + tuple(coords[:axis] + coords[axis+1:])
+        s = sorted(entities, key=keyfunc, reverse=(dir==-1))
 
         divisions = numpy.linspace(minx, maxx, ndiv+1)
         (entities, coords) = zip(*s)
