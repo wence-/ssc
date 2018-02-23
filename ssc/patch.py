@@ -82,21 +82,13 @@ class JITModule(seq.JITModule):
 
 
 def matrix_funptr(form):
-    from tsfc import compile_form
-    from firedrake.tsfc_interface import KernelInfo, Kernel
+    from firedrake.tsfc_interface import compile_form
     test, trial = map(operator.methodcaller("function_space"), form.arguments())
     if test != trial:
         raise NotImplementedError("Only for matching test and trial spaces")
-    kernel, = compile_form(form, prefix="subspace_form")
+    kernel, = compile_form(form, "subspace_form", split=False)
 
-    kinfo = KernelInfo(kernel=Kernel(kernel.ast, kernel.ast.name),
-                       integral_type=kernel.integral_type,
-                       oriented=kernel.oriented,
-                       subdomain_id=kernel.subdomain_id,
-                       domain_number=kernel.domain_number,
-                       coefficient_map=kernel.coefficient_numbers,
-                       needs_cell_facets=False,
-                       pass_layer_arg=False)
+    kinfo = kernel.kinfo
 
     if kinfo.subdomain_id != "otherwise":
         raise NotImplementedError("Only for full domain integrals")
