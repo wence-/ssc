@@ -1028,6 +1028,7 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     ierr = PetscFree(patch->bs); CHKERRQ(ierr);
     ierr = PetscFree(patch->nodesPerCell); CHKERRQ(ierr);
     ierr = PetscFree(patch->cellNodeMap); CHKERRQ(ierr);
+    ierr = PetscFree(patch->subspaceOffsets); CHKERRQ(ierr);
 
     if (patch->bcs) {
         for ( i = 0; i < patch->npatch; i++ ) {
@@ -1066,6 +1067,11 @@ static PetscErrorCode PCReset_PATCH(PC pc)
         }
         ierr = PetscFree(patch->patchY); CHKERRQ(ierr);
     }
+
+    if (patch->partition_of_unity) {
+        ierr = VecDestroy(&patch->dof_weights); CHKERRQ(ierr);
+    }
+
     if (patch->patch_dof_weights) {
         for ( i = 0; i < patch->npatch; i++ ) {
             ierr = VecDestroy(patch->patch_dof_weights + i); CHKERRQ(ierr);
@@ -1140,6 +1146,7 @@ static PetscErrorCode PCPatchZeroMatrix_Private(Mat mat, const PetscInt ncell,
     }
     ierr = MatAssemblyBegin(mat, MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
     ierr = MatAssemblyEnd(mat, MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
+    ierr = PetscFree(values); CHKERRQ(ierr);
     PetscFunctionReturn(0);
 }
 
