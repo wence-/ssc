@@ -155,7 +155,7 @@ def bcdofs(bc, ghost=True):
     for (i, idx) in enumerate(indices):
         if isinstance(Z.ufl_element(), VectorElement):
             offset += idx
-            assert i == len(indices)-1 # assert we're at the end of the chain
+            assert i == len(indices)-1  # assert we're at the end of the chain
             assert Z.sub(idx).value_size == 1
         elif isinstance(Z.ufl_element(), MixedElement):
             if ghost:
@@ -168,7 +168,6 @@ def bcdofs(bc, ghost=True):
         Z = Z.sub(idx)
 
     bs = Z.value_size
-    out = []
     nodes = bc.nodes
     if not ghost:
         nodes = nodes[nodes < Z.dof_dset.size]
@@ -193,7 +192,8 @@ def user_construction_op(pc, *args, **kwargs):
 
 def setup_patch_pc(patch, J, bcs):
     patch = cPatchPC.PC.cast(patch)
-    funptr, kinfo = matrix_funptr(J)
+    with PETSc.Log.Event("Pre compile"):
+        funptr, kinfo = matrix_funptr(J)
     V, _ = map(operator.methodcaller("function_space"), J.arguments())
     mesh = V.ufl_domain()
 
@@ -284,4 +284,3 @@ class PatchPC(PCBase):
 
     def view(self, pc, viewer=None):
         self.patch.view(viewer=viewer)
-
