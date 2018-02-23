@@ -1119,18 +1119,45 @@ static PetscErrorCode PCDestroy_PATCH(PC pc)
     PetscFunctionReturn(0);
 }
 
-static PetscErrorCode PCPatchCreateMatrix(PC pc, Vec x, Vec y, Mat *mat)
+static PetscErrorCode PCPatchZeroMatrix_Private(Mat mat, const PetscInt ncell,
+                                                const PetscInt ndof,
+                                                const PetscInt *dof)
+{
+    const PetscScalar *values = NULL;
+    PetscInt rows;
+    PetscErrorCode ierr;
+
+    PetscFunctionBegin;
+
+    ierr = PetscCalloc1(ndof*ndof, &values); CHKERRQ(ierr);
+    for (PetscInt c = 0; c < ncell; c++) {
+        const PetscInt *idx = &dof[ndof*c];
+        ierr = MatSetValues(mat, ndof, idx, ndof, idx, values, INSERT_VALUES); CHKERRQ(ierr);
+    }
+    ierr = MatGetLocalSize(mat, &rows, NULL); CHKERRQ(ierr);
+    for (PetscInt i = 0; i < rows; i++) {
+        ierr = MatSetValues(mat, 1, &i, 1, &i, values, INSERT_VALUES); CHKERRQ(ierr);
+    }
+    ierr = MatAssemblyBegin(mat, MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
+    ierr = MatAssemblyEnd(mat, MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
+    PetscFunctionReturn(0);
+}
+
+static PetscErrorCode PCPatchCreateMatrix(PC pc, PetscInt which, Mat *mat)
 {
     PetscErrorCode  ierr;
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
-    PetscInt        csize, rsize, cbs, rbs;
+    PetscInt        csize, rsize;
+    Vec             x, y;
+    PetscBool       flg;
     const char     *prefix = NULL;
 
     PetscFunctionBegin;
+
+    x = patch->patchX[which];
+    y = patch->patchY[which];
     ierr = VecGetSize(x, &csize); CHKERRQ(ierr);
-    ierr = VecGetBlockSize(x, &cbs); CHKERRQ(ierr);
     ierr = VecGetSize(y, &rsize); CHKERRQ(ierr);
-    ierr = VecGetBlockSize(y, &rbs); CHKERRQ(ierr);
     ierr = MatCreate(PETSC_COMM_SELF, mat); CHKERRQ(ierr);
     ierr = PCGetOptionsPrefix(pc, &prefix); CHKERRQ(ierr);
     ierr = MatSetOptionsPrefix(*mat, prefix); CHKERRQ(ierr);
@@ -1139,6 +1166,42 @@ static PetscErrorCode PCPatchCreateMatrix(PC pc, Vec x, Vec y, Mat *mat)
         ierr = MatSetType(*mat, patch->sub_mat_type); CHKERRQ(ierr);
     }
     ierr = MatSetSizes(*mat, rsize, csize, rsize, csize); CHKERRQ(ierr);
+    ierr = PetscObjectTypeCompare((PetscObject)*mat, MATDENSE, &flg); CHKERRQ(ierr);
+    if (!flg) {
+        ierr = PetscObjectTypeCompare((PetscObject)*mat, MATSEQDENSE, &flg); CHKERRQ(ierr);
+    }
+
+    if (!flg) {
+        Mat                pre;
+        const PetscInt    *dofsArray = NULL;
+        PetscInt           pStart, pEnd, ncell, offset;
+        ierr = MatCreate(PETSC_COMM_SELF, &pre); CHKERRQ(ierr);
+        ierr = MatSetType(pre, MATPREALLOCATOR); CHKERRQ(ierr);
+        ierr = MatSetSizes(pre, rsize, csize, rsize, csize); CHKERRQ(ierr);
+        ierr = MatSetUp(pre); CHKERRQ(ierr);
+
+        ierr = ISGetIndices(patch->dofs, &dofsArray); CHKERRQ(ierr);
+        ierr = PetscSectionGetChart(patch->cellCounts, &pStart, &pEnd); CHKERRQ(ierr);
+
+        which += pStart;
+        if (which >= pEnd) {
+            SETERRQ(PETSC_COMM_SELF, PETSC_ERR_ARG_OUTOFRANGE, "Asked for operator index is invalid\n"); CHKERRQ(ierr);
+        }
+
+        ierr = PetscSectionGetDof(patch->cellCounts, which, &ncell); CHKERRQ(ierr);
+        ierr = PetscSectionGetOffset(patch->cellCounts, which, &offset); CHKERRQ(ierr);
+
+        ierr = PCPatchZeroMatrix_Private(pre, ncell, patch->totalDofsPerCell,
+                                         &dofsArray[offset*patch->totalDofsPerCell]); CHKERRQ(ierr);
+
+        ierr = MatPreallocatorPreallocate(pre, PETSC_FALSE, *mat); CHKERRQ(ierr);
+        ierr = PCPatchZeroMatrix_Private(*mat, ncell, patch->totalDofsPerCell,
+                                         &dofsArray[offset*patch->totalDofsPerCell]); CHKERRQ(ierr);
+        ierr = ISRestoreIndices(patch->dofs, &dofsArray); CHKERRQ(ierr);
+
+        ierr = MatDestroy(&pre); CHKERRQ(ierr);
+    }
+
     ierr = MatSetUp(*mat); CHKERRQ(ierr);
 
     PetscFunctionReturn(0);
@@ -1288,9 +1351,10 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
                 ierr = PetscMalloc1(patch->npatch, &patch->multMat); CHKERRQ(ierr);
             }
             for ( PetscInt i = 0; i < patch->npatch; i++ ) {
-                ierr = PCPatchCreateMatrix(pc, patch->patchX[i], patch->patchY[i], patch->mat + i); CHKERRQ(ierr);
+                ierr = PCPatchCreateMatrix(pc, i, patch->mat + i); CHKERRQ(ierr);
                 if (patch->multiplicative) {
-                    ierr = PCPatchCreateMatrix(pc, patch->patchX[i], patch->patchY[i], patch->multMat + i); CHKERRQ(ierr);
+                    ierr = MatDuplicate(patch->mat[i], MAT_SHARE_NONZERO_PATTERN,
+                                        patch->multMat + i); CHKERRQ(ierr);
                 }
             }
         }
@@ -1416,9 +1480,9 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
             ierr = VecRestoreArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
             if (!patch->save_operators) {
                 Mat mat;
-                ierr = PCPatchCreateMatrix(pc, patch->patchX[i], patch->patchY[i], &mat); CHKERRQ(ierr);
+                ierr = PCPatchCreateMatrix(pc, i, &mat); CHKERRQ(ierr);
                 if (patch->multiplicative) {
-                    ierr = PCPatchCreateMatrix(pc, patch->patchX[i], patch->patchY[i], &multMat); CHKERRQ(ierr);
+                    ierr = MatDuplicate(mat, MAT_SHARE_NONZERO_PATTERN, &multMat); CHKERRQ(ierr);
                 }
                 /* Populate operator here. */
                 ierr = PCPatchComputeOperator(pc, mat, multMat, i); CHKERRQ(ierr);
@@ -1476,13 +1540,11 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     /* Now patch->localY contains the solution of the patch solves, so
      * we need to combine them all. */
     ierr = VecSet(y, 0.0); CHKERRQ(ierr);
-    /* PEF: replace with VecCopy for now */
     ierr = VecGetArray(y, &globalY); CHKERRQ(ierr);
     ierr = VecGetArrayRead(patch->localY, (const PetscScalar **)&localY); CHKERRQ(ierr);
     ierr = PetscSFReduceBegin(patch->defaultSF, MPIU_SCALAR, localY, globalY, MPI_SUM); CHKERRQ(ierr);
     ierr = PetscSFReduceEnd(patch->defaultSF, MPIU_SCALAR, localY, globalY, MPI_SUM); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(patch->localY, (const PetscScalar **)&localY); CHKERRQ(ierr);
-
 
     /* Now we need to send the global BC values through */
     ierr = VecGetArrayRead(x, &globalX); CHKERRQ(ierr);
