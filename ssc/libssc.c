@@ -70,7 +70,7 @@ typedef struct {
     PetscErrorCode  (*patchconstructop)(void*, DM, PetscInt, PetscHashI); /* patch construction */
     PetscInt         codim; /* dimension or codimension of entities to loop over; */
     PetscInt         dim;   /* only oxne of them can be set */
-    PetscInt         vankaspace; /* What's the constraint space, when we're doing Vanka */
+    PetscInt         exclude_subspace; /* What's the constraint space, when we're doing Vanka */
     PetscInt         vankadim;   /* In Vanka construction, should we eliminate any entities of a certain dimension? */
 
     PetscBool        print_patches; /* Should we print out information about patch construction? */
@@ -378,7 +378,7 @@ static PetscErrorCode PCPatchCompleteCellPatch(DM dm, PetscHashI ht, PetscHashI 
    For Vanka smoothing, this needs to do something special: ignore dofs of the
    constraint subspace on entities that aren't the base entity we're building the patch
    around. */
-static PetscErrorCode PCPatchGetPointDofs(PC_PATCH *patch, PetscHashI pts, PetscHashI dofs, PetscInt base, PetscInt vankaspace)
+static PetscErrorCode PCPatchGetPointDofs(PC_PATCH *patch, PetscHashI pts, PetscHashI dofs, PetscInt base, PetscInt exclude_subspace)
 {
     PetscErrorCode    ierr;
     PetscInt          ldof, loff;
@@ -393,7 +393,7 @@ static PetscErrorCode PCPatchGetPointDofs(PC_PATCH *patch, PetscHashI pts, Petsc
         PetscInt bs = patch->bs[k];
         PetscInt subspaceOffset = patch->subspaceOffsets[k];
 
-        if (k == vankaspace) {
+        if (k == exclude_subspace) {
             /* only get this subspace dofs at the base entity, not any others */
             ierr = PetscSectionGetDof(dofSection, base, &ldof); CHKERRQ(ierr);
             ierr = PetscSectionGetOffset(dofSection, base, &loff); CHKERRQ(ierr);
@@ -892,7 +892,7 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
            I see on the patch}\{dofs I am responsible for updating} */
         ierr = patch->patchconstructop((void*)patch, dm, v, ownedpts); CHKERRQ(ierr);
         ierr = PCPatchCompleteCellPatch(dm, ownedpts, seenpts); CHKERRQ(ierr);
-        ierr = PCPatchGetPointDofs(patch, ownedpts, owneddofs, v, patch->vankaspace); CHKERRQ(ierr);
+        ierr = PCPatchGetPointDofs(patch, ownedpts, owneddofs, v, patch->exclude_subspace); CHKERRQ(ierr);
         ierr = PCPatchGetPointDofs(patch, seenpts, seendofs, v, -1); CHKERRQ(ierr);
         ierr = PCPatchComputeSetDifference(owneddofs, seendofs, artificialbcs); CHKERRQ(ierr);
 
@@ -928,21 +928,27 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
             }
             ierr = PetscSynchronizedPrintf(comm, "\n"); CHKERRQ(ierr);
             ierr = PetscSynchronizedPrintf(comm, "Patch %d: global BCs:\n", v); CHKERRQ(ierr);
-            PetscHashIIterBegin(globalbcdofs, hi);
-            while (!PetscHashIIterAtEnd(globalbcdofs, hi)) {
-                PetscInt globalDof;
-                PetscHashIIterGetKey(globalbcdofs, hi, globalDof);
-                PetscHashIIterNext(globalbcdofs, hi);
-                ierr = PetscSynchronizedPrintf(comm, "%d ", globalDof); CHKERRQ(ierr);
+            PetscHashISize(globalbcdofs, numBcs);
+            if (numBcs > 0) {
+                PetscHashIIterBegin(globalbcdofs, hi);
+                while (!PetscHashIIterAtEnd(globalbcdofs, hi)) {
+                    PetscInt globalDof;
+                    PetscHashIIterGetKey(globalbcdofs, hi, globalDof);
+                    PetscHashIIterNext(globalbcdofs, hi);
+                    ierr = PetscSynchronizedPrintf(comm, "%d ", globalDof); CHKERRQ(ierr);
+                }
             }
             ierr = PetscSynchronizedPrintf(comm, "\n"); CHKERRQ(ierr);
             ierr = PetscSynchronizedPrintf(comm, "Patch %d: artificial BCs:\n", v); CHKERRQ(ierr);
-            PetscHashIIterBegin(artificialbcs, hi);
-            while (!PetscHashIIterAtEnd(artificialbcs, hi)) {
-                PetscInt globalDof;
-                PetscHashIIterGetKey(artificialbcs, hi, globalDof);
-                PetscHashIIterNext(artificialbcs, hi);
-                ierr = PetscSynchronizedPrintf(comm, "%d ", globalDof); CHKERRQ(ierr);
+            PetscHashISize(artificialbcs, numBcs);
+            if (numBcs > 0) {
+                PetscHashIIterBegin(artificialbcs, hi);
+                while (!PetscHashIIterAtEnd(artificialbcs, hi)) {
+                    PetscInt globalDof;
+                    PetscHashIIterGetKey(artificialbcs, hi, globalDof);
+                    PetscHashIIterNext(artificialbcs, hi);
+                    ierr = PetscSynchronizedPrintf(comm, "%d ", globalDof); CHKERRQ(ierr);
+                }
             }
             ierr = PetscSynchronizedPrintf(comm, "\n\n"); CHKERRQ(ierr);
             ierr = PetscSynchronizedFlush(comm, PETSC_STDOUT); CHKERRQ(ierr);
@@ -1696,9 +1702,9 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
         case PC_PATCH_VANKA:
             patch->patchconstructop = PCPatchConstruct_Vanka;
             ierr = PetscOptionsInt("-pc_patch_vanka_dim", "Topological dimension of entities for Vanka to ignore", "PCSetFromOptions_PATCH", patch->vankadim, &patch->vankadim, &flg);
-            ierr = PetscOptionsInt("-pc_patch_vanka_space", "What subspace is the constraint space for Vanka?", "PCSetFromOptions_PATCH", patch->vankaspace, &patch->vankaspace, &flg);
-            if (!flg) {
-                SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"Must set Vanka subspace using -pc_patch_vanka_space when using Vanka");
+            ierr = PetscOptionsInt("-pc_patch_vanka_space", "What subspace is the constraint space for Vanka?", "PCSetFromOptions_PATCH", patch->exclude_subspace, &patch->exclude_subspace, &flg);
+            if (flg) {
+                SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER, "-pc_patch_vanka_space has been renamed to -pc_patch_exclude_subspace");
             }
             break;
         case PC_PATCH_USER:
@@ -1722,6 +1728,8 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
 
     ierr = PetscOptionsBool("-pc_patch_symmetrise_sweep", "Go start->end, end->start?",
                             "PCSetFromOptions_PATCH", patch->symmetrise_sweep, &patch->symmetrise_sweep, &flg); CHKERRQ(ierr);
+
+    ierr = PetscOptionsInt("-pc_patch_exclude_subspace", "What subspace (if any) to exclude in construction?", "PCSetFromOptions_PATCH", patch->exclude_subspace, &patch->exclude_subspace, &flg);
 
     ierr = PetscOptionsTail(); CHKERRQ(ierr);
     PetscFunctionReturn(0);
@@ -1785,7 +1793,7 @@ PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
     patch->multiplicative     = PETSC_FALSE;
     patch->codim              = -1;
     patch->dim                = -1;
-    patch->vankaspace         = -1;
+    patch->exclude_subspace   = -1;
     patch->vankadim           = -1;
     patch->patchconstructop   = PCPatchConstruct_Star;
     patch->print_patches      = PETSC_FALSE;
