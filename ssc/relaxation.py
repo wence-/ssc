@@ -1,7 +1,7 @@
 import numpy
 from firedrake.petsc import PETSc
 
-__all__ = ['PlaneSmoother']
+__all__ = ['PlaneSmoother', 'OrderedVanka']
 
 class PlaneSmoother(object):
     @staticmethod
@@ -42,7 +42,7 @@ class PlaneSmoother(object):
         sentinel = object()
         sweeps = PETSc.Options(prefix).getString("pc_patch_construction_ps_sweeps", default=sentinel)
         if sweeps == sentinel:
-            raise ValueError("Must set %spc_patch_construction_python_type" % prefix)
+            raise ValueError("Must set %spc_patch_construction_ps_sweeps" % prefix)
 
         out = []
         for sweep in sweeps.split(':'):
@@ -55,4 +55,71 @@ class PlaneSmoother(object):
                 iset = PETSc.IS().createGeneral(patch, comm=PETSc.COMM_SELF)
                 out.append(iset)
 
+        return out
+
+class OrderedVanka(object):
+    @staticmethod
+    def vanka_callback(dm, entity, nclosures):
+        out = set()
+        out.add(entity)
+
+        for c in range(nclosures):
+            new = set()
+            for entity in out:
+                star = dm.getTransitiveClosure(entity, useCone=False)[0]
+                for cell in star:
+                    closure = dm.getTransitiveClosure(cell, useCone=True)[0]
+                    for possible in closure:
+                        new.add(possible)
+            out = out.union(new)
+        return list(out)
+
+    @staticmethod
+    def coords(dm, p):
+        coordsSection = dm.getCoordinateSection()
+        coordsDM = dm.getCoordinateDM()
+        dim = coordsDM.getDimension()
+        coordsVec = dm.getCoordinatesLocal()
+        return dm.getVecClosure(coordsSection, coordsVec, p).reshape(-1, dim).mean(axis=0)
+
+    def __call__(self, pc):
+        dm = pc.getDM()
+        prefix = pc.getOptionsPrefix()
+        sentinel = object()
+        opts = PETSc.Options(prefix)
+
+        codim = opts.getInt("pc_patch_construction_ovanka_codim", default=sentinel)
+        if codim == sentinel:
+            dim = opts.getInt("pc_patch_construction_ovanka_dim", default=0)
+            entities = range(*dm.getDepthStratum(dim))
+        else:
+            entities = range(*dm.getHeightStratum(dim))
+
+        nclosure = opts.getInt("pc_patch_construction_ovanka_nclosures", default=1)
+
+        ec = ((p, self.coords(dm, p)) for p in entities)
+
+        sortorder = opts.getString("pc_patch_construction_ovanka_sort_order", default=sentinel)
+        if sortorder == sentinel:
+            raise ValueError("Must set %spc_patch_construction_ovanka_sort_order" % prefix)
+        if sortorder != "None":
+            sortdata = []
+            for axis in sortorder.split(':'):
+                ax = int(axis[0])
+                if len(axis) > 1:
+                    sgn = {'+': 1, '-': -1}[axis[1]]
+                else:
+                    sgn = 1
+                sortdata.append((ax, sgn))
+
+            def keyfunc(z):
+                return tuple(sgn*z[1][ax] for (ax, sgn) in sortdata)
+
+            ec = sorted(ec, key=keyfunc)
+
+        out = []
+        for x in ec:
+            subentities = self.vanka_callback(dm, x[0], nclosure)
+            iset = PETSc.IS().createGeneral(subentities, comm=PETSc.COMM_SELF)
+            out.append(iset)
         return out
