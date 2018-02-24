@@ -498,8 +498,7 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
         ierr = patch->userpatchconstructionop(pc, &patch->nuserIS, &patch->userIS, patch->userpatchconstructctx); CHKERRQ(ierr);
         vStart = 0;
         vEnd = patch->nuserIS;
-    }
-    else if (patch->codim < 0) { /* codim unset */
+    } else if (patch->codim < 0) { /* codim unset */
         if (patch->dim < 0) { /* dim unset */
             ierr = DMPlexGetDepthStratum(dm, 0, &vStart, &vEnd); CHKERRQ(ierr);
         } else { /* dim set */
@@ -510,7 +509,7 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
     }
 
     /* These labels mark the owned points.  We only create patches
-     * around entites that this process owns. */
+     * around points that this process owns. */
     ierr = DMGetLabel(dm, "pyop2_ghost", &ghost); CHKERRQ(ierr);
 
     ierr = DMLabelCreateIndex(ghost, pStart, pEnd); CHKERRQ(ierr);
@@ -522,16 +521,26 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
     /* Count cells in the patch surrounding each entity */
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
         PetscHashIIter hi;
+        PetscInt chtSize;
 
-        ierr = DMLabelHasPoint(ghost, v, &flg); CHKERRQ(ierr);
-        /* Not an owned entity, don't make a cell patch. */
-        if (flg) {
-            continue;
+        if (!patch->user_patches) {
+            ierr = DMLabelHasPoint(ghost, v, &flg); CHKERRQ(ierr);
+            /* Not an owned entity, don't make a cell patch. */
+            if (flg) {
+                continue;
+            }
         }
 
         ierr = patch->patchconstructop((void*)patch, dm, v, ht); CHKERRQ(ierr);
         ierr = PCPatchCompleteCellPatch(dm, ht, cht);
-        PetscHashIIterBegin(cht, hi);
+
+        PetscHashISize(cht, chtSize);
+        if (chtSize == 0) {
+            /* empty patch, continue */
+            continue;
+        }
+
+        PetscHashIIterBegin(cht, hi); /* safe because size(cht) > 0 from above */
         while (!PetscHashIIterAtEnd(cht, hi)) {
             PetscInt entity;
             PetscHashIIterGetKey(cht, hi, entity);
@@ -589,7 +598,7 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
  * . cellCounts - Section with counts of cells around each vertex
  * . cells - IS of the cell point indices of cells in each patch
  * . cellNumbering - Section mapping plex cell points to Firedrake cell indices.
- * . nodesPerCell - number of dofs per cell.
+ * . nodesPerCell - number of nodes per cell.
  * - cellNodeMap - map from cells to node indices (nodesPerCell * numCells)
  *
  * Output Parameters:
@@ -1251,7 +1260,7 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, Mat multMat, PetscI
 
     /* Apply boundary conditions.  Could also do this through the local_to_patch guy. */
     if (patch->multiplicative) {
-        ierr = MatCopy(mat, multMat, DIFFERENT_NONZERO_PATTERN); CHKERRQ(ierr);
+        ierr = MatCopy(mat, multMat, SAME_NONZERO_PATTERN); CHKERRQ(ierr);
         ierr = MatZeroRowsColumnsIS(multMat, patch->multBcs[which-pStart], (PetscScalar)1.0, NULL, NULL); CHKERRQ(ierr);
     }
     ierr = MatZeroRowsColumnsIS(mat, patch->bcs[which-pStart], (PetscScalar)1.0, NULL, NULL); CHKERRQ(ierr);

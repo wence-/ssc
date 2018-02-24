@@ -2,7 +2,6 @@ import numpy
 cimport numpy
 cimport petsc4py.PETSc as PETSc
 from libc.stdint cimport uintptr_t
-from libc.stdio cimport printf
 
 cdef extern from "petsc.h" nogil:
     ctypedef long PetscInt
