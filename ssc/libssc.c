@@ -4,7 +4,7 @@
 #include <petscsf.h>
 #include <libssc.h>
 
-PetscLogEvent PC_Patch_CreatePatches, PC_Patch_ComputeOp, PC_Patch_Solve, PC_Patch_Scatter, PC_Patch_Apply;
+PetscLogEvent PC_Patch_CreatePatches, PC_Patch_ComputeOp, PC_Patch_Solve, PC_Patch_Scatter, PC_Patch_Apply, PC_Patch_Prealloc;
 
 static PetscBool PCPatchPackageInitialized = PETSC_FALSE;
 
@@ -21,6 +21,7 @@ PETSC_EXTERN PetscErrorCode PCPatchInitializePackage(void)
     ierr = PetscLogEventRegister("PCPATCHSolve", PC_CLASSID, &PC_Patch_Solve); CHKERRQ(ierr);
     ierr = PetscLogEventRegister("PCPATCHApply", PC_CLASSID, &PC_Patch_Apply); CHKERRQ(ierr);
     ierr = PetscLogEventRegister("PCPATCHScatter", PC_CLASSID, &PC_Patch_Scatter); CHKERRQ(ierr);
+    ierr = PetscLogEventRegister("PCPATCHPrealloc", PC_CLASSID, &PC_Patch_Prealloc); CHKERRQ(ierr);
 
     PetscFunctionReturn(0);
 }
@@ -1188,13 +1189,10 @@ static PetscErrorCode PCPatchCreateMatrix(PC pc, PetscInt which, Mat *mat)
     }
 
     if (!flg) {
-        Mat                pre;
-        const PetscInt    *dofsArray = NULL;
-        PetscInt           pStart, pEnd, ncell, offset;
-        ierr = MatCreate(PETSC_COMM_SELF, &pre); CHKERRQ(ierr);
-        ierr = MatSetType(pre, MATPREALLOCATOR); CHKERRQ(ierr);
-        ierr = MatSetSizes(pre, rsize, csize, rsize, csize); CHKERRQ(ierr);
-        ierr = MatSetUp(pre); CHKERRQ(ierr);
+        PetscHashI      ht;
+        PetscInt       *dnnz       = NULL;
+        const PetscInt *dofsArray = NULL;
+        PetscInt        pStart, pEnd, ncell, offset;
 
         ierr = ISGetIndices(patch->dofs, &dofsArray); CHKERRQ(ierr);
         ierr = PetscSectionGetChart(patch->cellCounts, &pStart, &pEnd); CHKERRQ(ierr);
@@ -1207,15 +1205,42 @@ static PetscErrorCode PCPatchCreateMatrix(PC pc, PetscInt which, Mat *mat)
         ierr = PetscSectionGetDof(patch->cellCounts, which, &ncell); CHKERRQ(ierr);
         ierr = PetscSectionGetOffset(patch->cellCounts, which, &offset); CHKERRQ(ierr);
 
-        ierr = PCPatchZeroMatrix_Private(pre, ncell, patch->totalDofsPerCell,
-                                         &dofsArray[offset*patch->totalDofsPerCell]); CHKERRQ(ierr);
+        ierr = PetscMalloc1(rsize, &dnnz); CHKERRQ(ierr);
+        for (PetscInt i = 0; i < rsize; i++) {
+            dnnz[i] = 0;
+        }
+        ierr = PetscLogEventBegin(PC_Patch_Prealloc, pc, 0, 0, 0); CHKERRQ(ierr);
+        PetscHashICreate(ht);
+        /* Overestimate number of entries.  This is exact for DG. */
+        PetscHashIResize(ht, ncell*patch->totalDofsPerCell*patch->totalDofsPerCell);
+        for (PetscInt c = 0; c < ncell; c++) {
+            const PetscInt *idx = dofsArray + (offset + c)*patch->totalDofsPerCell;
+            for (PetscInt i = 0; i < patch->totalDofsPerCell; i++) {
+                const PetscInt row = idx[i];
+                PetscInt rkey = (row << 4*sizeof(PetscInt));
+                for (PetscInt j = 0; j < patch->totalDofsPerCell; j++) {
+                    const PetscInt col = idx[j];
+                    /* This key is a bijection as long as we don't
+                     * have more than max(PetscInt)/2 rows per patch. */
+                    const PetscInt key = rkey^col;
+                    PetscBool flg;
+                    PetscHashIHasKey(ht, key, flg);
+                    if (!flg) {
+                        PetscHashIAdd(ht, key, 0);
+                        ++dnnz[row];
+                    }
+                }
+            }
+        }
+        PetscHashIDestroy(ht);
+        ierr = MatXAIJSetPreallocation(*mat, 1, dnnz, NULL, NULL, NULL); CHKERRQ(ierr);
 
-        ierr = MatPreallocatorPreallocate(pre, PETSC_FALSE, *mat); CHKERRQ(ierr);
+        ierr = PetscFree(dnnz); CHKERRQ(ierr);
         ierr = PCPatchZeroMatrix_Private(*mat, ncell, patch->totalDofsPerCell,
                                          &dofsArray[offset*patch->totalDofsPerCell]); CHKERRQ(ierr);
+        ierr = PetscLogEventEnd(PC_Patch_Prealloc, pc, 0, 0, 0); CHKERRQ(ierr);
         ierr = ISRestoreIndices(patch->dofs, &dofsArray); CHKERRQ(ierr);
 
-        ierr = MatDestroy(&pre); CHKERRQ(ierr);
     }
 
     ierr = MatSetUp(*mat); CHKERRQ(ierr);
