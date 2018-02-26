@@ -1189,7 +1189,7 @@ static PetscErrorCode PCPatchCreateMatrix(PC pc, PetscInt which, Mat *mat)
     }
 
     if (!flg) {
-        PetscHashI      ht;
+        PetscBT         bt;
         PetscInt       *dnnz       = NULL;
         const PetscInt *dofsArray = NULL;
         PetscInt        pStart, pEnd, ncell, offset;
@@ -1210,29 +1210,27 @@ static PetscErrorCode PCPatchCreateMatrix(PC pc, PetscInt which, Mat *mat)
             dnnz[i] = 0;
         }
         ierr = PetscLogEventBegin(PC_Patch_Prealloc, pc, 0, 0, 0); CHKERRQ(ierr);
-        PetscHashICreate(ht);
-        /* Overestimate number of entries.  This is exact for DG. */
-        PetscHashIResize(ht, ncell*patch->totalDofsPerCell*patch->totalDofsPerCell);
+
+        /* XXX: This uses N^2 bits to store the sparsity pattern on a
+         * patch.  This is probably OK if the patches are not too big,
+         * but could use quite a bit of memory for planes in 3D.
+         * Should we switch based on the value of rsize to a
+         * hash-table (slower, but more memory efficient) approach? */
+        ierr = PetscBTCreate(rsize*rsize, &bt); CHKERRQ(ierr);
         for (PetscInt c = 0; c < ncell; c++) {
             const PetscInt *idx = dofsArray + (offset + c)*patch->totalDofsPerCell;
             for (PetscInt i = 0; i < patch->totalDofsPerCell; i++) {
                 const PetscInt row = idx[i];
-                PetscInt rkey = (row << 4*sizeof(PetscInt));
                 for (PetscInt j = 0; j < patch->totalDofsPerCell; j++) {
                     const PetscInt col = idx[j];
-                    /* This key is a bijection as long as we don't
-                     * have more than max(PetscInt)/2 rows per patch. */
-                    const PetscInt key = rkey^col;
-                    PetscBool flg;
-                    PetscHashIHasKey(ht, key, flg);
-                    if (!flg) {
-                        PetscHashIAdd(ht, key, 0);
+                    const PetscInt key = row*rsize + col;
+                    if (!PetscBTLookupSet(bt, key)) {
                         ++dnnz[row];
                     }
                 }
             }
         }
-        PetscHashIDestroy(ht);
+        PetscBTDestroy(&bt);
         ierr = MatXAIJSetPreallocation(*mat, 1, dnnz, NULL, NULL, NULL); CHKERRQ(ierr);
 
         ierr = PetscFree(dnnz); CHKERRQ(ierr);
