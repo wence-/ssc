@@ -100,23 +100,26 @@ class OrderedVanka(object):
 
         ec = ((p, self.coords(dm, p)) for p in entities)
 
-        sortorder = opts.getString("pc_patch_construction_ovanka_sort_order", default=sentinel)
-        if sortorder == sentinel:
-            raise ValueError("Must set %spc_patch_construction_ovanka_sort_order" % prefix)
-        if sortorder != "None":
-            sortdata = []
-            for axis in sortorder.split(':'):
-                ax = int(axis[0])
-                if len(axis) > 1:
-                    sgn = {'+': 1, '-': -1}[axis[1]]
-                else:
-                    sgn = 1
-                sortdata.append((ax, sgn))
+        sortorders = opts.getString("pc_patch_construction_ostar_sort_order", default=sentinel)
+        if sortorders == sentinel:
+            raise ValueError("Must set %spc_patch_construction_ostar_sort_order" % prefix)
+        if sortorders != "None":
+            outecs = []
+            for sortorder in sortorders.split("|"):
+                sortdata = []
+                for axis in sortorder.split(':'):
+                    ax = int(axis[0])
+                    if len(axis) > 1:
+                        sgn = {'+': 1, '-': -1}[axis[1]]
+                    else:
+                        sgn = 1
+                    sortdata.append((ax, sgn))
 
-            def keyfunc(z):
-                return tuple(sgn*z[1][ax] for (ax, sgn) in sortdata)
+                def keyfunc(z):
+                    return tuple(sgn*z[1][ax] for (ax, sgn) in sortdata)
 
-            ec = sorted(ec, key=keyfunc)
+                outecs = chain(outecs, sorted(ec, key=keyfunc))
+            ec = outecs
 
         out = []
         for x in ec:
