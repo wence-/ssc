@@ -98,8 +98,6 @@ class OrderedVanka(object):
 
         nclosure = opts.getInt("pc_patch_construction_ovanka_nclosures", default=1)
 
-        ec = ((p, self.coords(dm, p)) for p in entities)
-
         sortorders = opts.getString("pc_patch_construction_ostar_sort_order", default=sentinel)
         if sortorders == sentinel:
             raise ValueError("Must set %spc_patch_construction_ostar_sort_order" % prefix)
@@ -118,8 +116,11 @@ class OrderedVanka(object):
                 def keyfunc(z):
                     return tuple(sgn*z[1][ax] for (ax, sgn) in sortdata)
 
-                outecs = chain(outecs, sorted(ec, key=keyfunc))
+                ec_ = ((p, self.coords(dm, p)) for p in entities)
+                outecs = chain(outecs, sorted(ec_, key=keyfunc))
             ec = outecs
+        else:
+            ec = ((p, self.coords(dm, p)) for p in entities)
 
         out = []
         for x in ec:
@@ -166,8 +167,6 @@ class OrderedStar(object):
 
         nclosure = opts.getInt("pc_patch_construction_ostar_nclosures", default=1)
 
-        ec = ((p, self.coords(dm, p)) for p in entities)
-
         sortorders = opts.getString("pc_patch_construction_ostar_sort_order", default=sentinel)
         if sortorders == sentinel:
             raise ValueError("Must set %spc_patch_construction_ostar_sort_order" % prefix)
@@ -186,8 +185,12 @@ class OrderedStar(object):
                 def keyfunc(z):
                     return tuple(sgn*z[1][ax] for (ax, sgn) in sortdata)
 
-                outecs = chain(outecs, sorted(ec, key=keyfunc))
+                ec_ = ((p, self.coords(dm, p)) for p in entities)
+                outecs = chain(outecs, sorted(ec_, key=keyfunc))
             ec = outecs
+        else:
+            ec = ((p, self.coords(dm, p)) for p in entities)
+
 
         out = []
         for x in ec:
