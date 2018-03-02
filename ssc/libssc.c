@@ -1627,60 +1627,20 @@ static PetscErrorCode PCSetUpOnBlocks_PATCH(PC pc)
 PETSC_EXTERN PetscErrorCode PCPatchConstruct_Star(void *vpatch, DM dm, PetscInt entity, PetscHashI ht)
 {
     PetscErrorCode ierr;
-    PetscInt       starSize, closureSize, fclosureSize;
-    PetscInt      *star = NULL, *closure = NULL, *fclosure = NULL;
-    PetscInt       vStart, vEnd;
-    PetscInt       fStart, fEnd;
-    PetscInt       cStart, cEnd;
+    PetscInt       starSize;
+    PetscInt      *star = NULL;
 
     PetscFunctionBegin;
     PetscHashIClear(ht);
 
-    /* Find out what the facets and vertices are */
-    ierr = DMPlexGetHeightStratum(dm, 1, &fStart, &fEnd); CHKERRQ(ierr);
-    ierr = DMPlexGetDepthStratum(dm,  0, &vStart, &vEnd); CHKERRQ(ierr);
-    ierr = DMPlexGetHeightStratum(dm, 0, &cStart, &cEnd); CHKERRQ(ierr);
-
     /* To start with, add the entity we care about */
     PetscHashIAdd(ht, entity, 0);
 
-    /* Loop over all the cells that this entity connects to */
+    /* Loop over all the points that this entity connects to */
     ierr = DMPlexGetTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
     for ( PetscInt si = 0; si < starSize; si++ ) {
-        PetscInt cell = star[2*si];
-        if ( cell < cStart || cell >= cEnd) continue;
-        /* now loop over all entities in the closure of that cell */
-        ierr = DMPlexGetTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
-        for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
-            PetscInt newentity = closure[2*ci];
-
-            if (vStart <= newentity && newentity < vEnd) {
-                /* Is another vertex. Don't want to add. continue */
-                continue;
-            } else if (fStart <= newentity && newentity < fEnd) {
-                /* Is another facet. Need to check if our own vertex is in its closure */
-                PetscBool should_add = PETSC_FALSE;
-                ierr = DMPlexGetTransitiveClosure(dm, newentity, PETSC_TRUE, &fclosureSize, &fclosure); CHKERRQ(ierr);
-                for ( PetscInt fi = 0; fi < fclosureSize; fi++) {
-                    PetscInt fentity = fclosure[2*fi];
-                    if (entity == fentity) {
-                        should_add = PETSC_TRUE;
-                        break;
-                    }
-                }
-                if (should_add) {
-                    PetscHashIAdd(ht, newentity, 0);
-                }
-            } else { /* not a vertex, not a facet, just add */
-                PetscHashIAdd(ht, newentity, 0);
-            }
-        }
-    }
-    if (fclosure) {
-        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &fclosure); CHKERRQ(ierr);
-    }
-    if (closure) {
-        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &closure); CHKERRQ(ierr);
+        PetscInt pt = star[2*si];
+        PetscHashIAdd(ht, pt, 0);
     }
     if (star) {
         ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, NULL, &star); CHKERRQ(ierr);
