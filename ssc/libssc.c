@@ -43,9 +43,7 @@ typedef struct {
     IS               gtol;
     IS              *bcs;
 
-    PetscSection     multBcCounts; /* these are the corresponding BC objects for just the actual */
     IS              *multBcs;      /* Only used for multiplicative smoothing to recalculate residual */
-
 
     PetscBool        save_operators; /* Save all operators (or create/destroy one at a time?) */
     PetscBool        partition_of_unity; /* Weight updates by dof multiplicity? */
@@ -70,8 +68,10 @@ typedef struct {
 
     PetscErrorCode  (*patchconstructop)(void*, DM, PetscInt, PetscHashI); /* patch construction */
     PetscInt         codim; /* dimension or codimension of entities to loop over; */
-    PetscInt         dim;   /* only oxne of them can be set */
-    PetscInt         exclude_subspace; /* What's the constraint space, when we're doing Vanka */
+    PetscInt         dim;   /* only one of them can be set */
+    PetscInt         exclude_subspace; /* If you don't want any other dofs from a particular subspace you can exclude them with this.
+                                          Used for Vanka in Stokes, for example, to eliminate all pressure dofs not on the vertex
+                                          you're building the patch around */
     PetscInt         vankadim;   /* In Vanka construction, should we eliminate any entities of a certain dimension? */
 
     PetscBool        print_patches; /* Should we print out information about patch construction? */
@@ -810,11 +810,9 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     const PetscInt *bcNodes    = NULL;
     PetscSection    gtolCounts = patch->gtolCounts;
     PetscSection    bcCounts;
-    PetscSection    multBcCounts;
     IS              gtol = patch->gtol;
     PetscHashI      globalBcs;
     PetscHashI      localBcs;
-    PetscHashI      multLocalBcs;
     PetscHashI      patchDofs;
     PetscHashI      ownedpts, seenpts, owneddofs, seendofs, artificialbcs;
     PetscHashIIter  hi;
@@ -836,7 +834,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     ierr = ISRestoreIndices(patch->ghostBcNodes, &bcNodes); CHKERRQ(ierr);
     PetscHashICreate(patchDofs);
     PetscHashICreate(localBcs);
-    PetscHashICreate(multLocalBcs);
     PetscHashICreate(ownedpts);
     PetscHashICreate(seenpts);
     PetscHashICreate(owneddofs);
@@ -850,9 +847,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     ierr = PetscMalloc1(vEnd - vStart, &patch->bcs); CHKERRQ(ierr);
 
     if (patch->multiplicative) {
-        ierr = PetscSectionCreate(PETSC_COMM_SELF, &patch->multBcCounts); CHKERRQ(ierr);
-        multBcCounts = patch->multBcCounts;
-        ierr = PetscSectionSetChart(multBcCounts, vStart, vEnd); CHKERRQ(ierr);
         ierr = PetscMalloc1(vEnd - vStart, &patch->multBcs); CHKERRQ(ierr);
     }
 
@@ -863,7 +857,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
         PetscInt multBcIndex = 0;
         PetscHashIClear(patchDofs);
         PetscHashIClear(localBcs);
-        PetscHashIClear(multLocalBcs);
         ierr = PetscSectionGetDof(gtolCounts, v, &dof); CHKERRQ(ierr);
         ierr = PetscSectionGetOffset(gtolCounts, v, &off); CHKERRQ(ierr);
 
@@ -883,17 +876,15 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
             PetscHashIHasKey(globalBcs, globalDof, flg);
             if (flg) {
                 PetscHashIAdd(localBcs, localDof, 0);
-                PetscHashIAdd(multLocalBcs, localDof, 0);
             }
         }
 
         /* If we're doing multiplicative, make the BC data structures now
            corresponding solely to actual globally imposed Dirichlet BCs */
         if (patch->multiplicative) {
-            PetscHashISize(multLocalBcs, numBcs);
-            ierr = PetscSectionSetDof(multBcCounts, v, numBcs); CHKERRQ(ierr);
+            PetscHashISize(localBcs, numBcs);
             ierr = PetscMalloc1(numBcs, &multBcsArray); CHKERRQ(ierr);
-            ierr = PetscHashIGetKeys(multLocalBcs, &multBcIndex, multBcsArray); CHKERRQ(ierr);
+            ierr = PetscHashIGetKeys(localBcs, &multBcIndex, multBcsArray); CHKERRQ(ierr);
             ierr = PetscSortInt(numBcs, multBcsArray); CHKERRQ(ierr);
             ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, multBcsArray, PETSC_OWN_POINTER, &(patch->multBcs[v - vStart])); CHKERRQ(ierr);
         }
@@ -1001,7 +992,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     PetscHashIDestroy(seenpts);
     PetscHashIDestroy(ownedpts);
     PetscHashIDestroy(localBcs);
-    PetscHashIDestroy(multLocalBcs);
     PetscHashIDestroy(patchDofs);
     PetscHashIDestroy(globalBcs);
 
@@ -1048,7 +1038,6 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     }
 
     if (patch->multiplicative) {
-        ierr = PetscSectionDestroy(&patch->multBcCounts); CHKERRQ(ierr);
         if (patch->multBcs) {
             for ( i = 0; i < patch->npatch; i++ ) {
                 ierr = ISDestroy(&patch->multBcs[i]); CHKERRQ(ierr);
@@ -1627,60 +1616,20 @@ static PetscErrorCode PCSetUpOnBlocks_PATCH(PC pc)
 PETSC_EXTERN PetscErrorCode PCPatchConstruct_Star(void *vpatch, DM dm, PetscInt entity, PetscHashI ht)
 {
     PetscErrorCode ierr;
-    PetscInt       starSize, closureSize, fclosureSize;
-    PetscInt      *star = NULL, *closure = NULL, *fclosure = NULL;
-    PetscInt       vStart, vEnd;
-    PetscInt       fStart, fEnd;
-    PetscInt       cStart, cEnd;
+    PetscInt       starSize;
+    PetscInt      *star = NULL;
 
     PetscFunctionBegin;
     PetscHashIClear(ht);
 
-    /* Find out what the facets and vertices are */
-    ierr = DMPlexGetHeightStratum(dm, 1, &fStart, &fEnd); CHKERRQ(ierr);
-    ierr = DMPlexGetDepthStratum(dm,  0, &vStart, &vEnd); CHKERRQ(ierr);
-    ierr = DMPlexGetHeightStratum(dm, 0, &cStart, &cEnd); CHKERRQ(ierr);
-
     /* To start with, add the entity we care about */
     PetscHashIAdd(ht, entity, 0);
 
-    /* Loop over all the cells that this entity connects to */
+    /* Loop over all the points that this entity connects to */
     ierr = DMPlexGetTransitiveClosure(dm, entity, PETSC_FALSE, &starSize, &star); CHKERRQ(ierr);
     for ( PetscInt si = 0; si < starSize; si++ ) {
-        PetscInt cell = star[2*si];
-        if ( cell < cStart || cell >= cEnd) continue;
-        /* now loop over all entities in the closure of that cell */
-        ierr = DMPlexGetTransitiveClosure(dm, cell, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
-        for ( PetscInt ci = 0; ci < closureSize; ci++ ) {
-            PetscInt newentity = closure[2*ci];
-
-            if (vStart <= newentity && newentity < vEnd) {
-                /* Is another vertex. Don't want to add. continue */
-                continue;
-            } else if (fStart <= newentity && newentity < fEnd) {
-                /* Is another facet. Need to check if our own vertex is in its closure */
-                PetscBool should_add = PETSC_FALSE;
-                ierr = DMPlexGetTransitiveClosure(dm, newentity, PETSC_TRUE, &fclosureSize, &fclosure); CHKERRQ(ierr);
-                for ( PetscInt fi = 0; fi < fclosureSize; fi++) {
-                    PetscInt fentity = fclosure[2*fi];
-                    if (entity == fentity) {
-                        should_add = PETSC_TRUE;
-                        break;
-                    }
-                }
-                if (should_add) {
-                    PetscHashIAdd(ht, newentity, 0);
-                }
-            } else { /* not a vertex, not a facet, just add */
-                PetscHashIAdd(ht, newentity, 0);
-            }
-        }
-    }
-    if (fclosure) {
-        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &fclosure); CHKERRQ(ierr);
-    }
-    if (closure) {
-        ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, NULL, &closure); CHKERRQ(ierr);
+        PetscInt pt = star[2*si];
+        PetscHashIAdd(ht, pt, 0);
     }
     if (star) {
         ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_FALSE, NULL, &star); CHKERRQ(ierr);
@@ -1851,13 +1800,36 @@ static PetscErrorCode PCView_PATCH(PC pc, PetscViewer viewer)
         PetscFunctionReturn(0);
     }
     ierr = PetscViewerASCIIPushTab(viewer); CHKERRQ(ierr);
-    ierr = PetscViewerASCIIPrintf(viewer, "Vertex-patch Additive Schwarz with %d patches\n", patch->npatch); CHKERRQ(ierr);
+    ierr = PetscViewerASCIIPrintf(viewer, "Subspace Correction preconditioner with %d patches\n", patch->npatch); CHKERRQ(ierr);
+    if (patch->multiplicative) {
+        ierr = PetscViewerASCIIPrintf(viewer, "Schwarz type: multiplicative\n"); CHKERRQ(ierr);
+    } else {
+        ierr = PetscViewerASCIIPrintf(viewer, "Schwarz type: additive\n"); CHKERRQ(ierr);
+    }
+    if (patch->partition_of_unity) {
+        ierr = PetscViewerASCIIPrintf(viewer, "Weighting by partition of unity\n"); CHKERRQ(ierr);
+    } else {
+        ierr = PetscViewerASCIIPrintf(viewer, "Not weighting by partition of unity\n"); CHKERRQ(ierr);
+    }
+    if (patch->symmetrise_sweep) {
+        ierr = PetscViewerASCIIPrintf(viewer, "Symmetrising sweep (start->end, then end->start)\n"); CHKERRQ(ierr);
+    } else {
+        ierr = PetscViewerASCIIPrintf(viewer, "Not symmetrising sweep\n"); CHKERRQ(ierr);
+    }
     if (!patch->save_operators) {
         ierr = PetscViewerASCIIPrintf(viewer, "Not saving patch operators (rebuilt every PCApply)\n"); CHKERRQ(ierr);
     } else {
         ierr = PetscViewerASCIIPrintf(viewer, "Saving patch operators (rebuilt every PCSetUp)\n"); CHKERRQ(ierr);
     }
-    ierr = PetscViewerASCIIPrintf(viewer, "DM used to define patches:\n"); CHKERRQ(ierr);
+    if (patch->patchconstructop == PCPatchConstruct_Star) {
+        ierr = PetscViewerASCIIPrintf(viewer, "Patch construction operator: star\n"); CHKERRQ(ierr);
+    } else if (patch->patchconstructop == PCPatchConstruct_Vanka) {
+        ierr = PetscViewerASCIIPrintf(viewer, "Patch construction operator: Vanka\n"); CHKERRQ(ierr);
+    } else if (patch->patchconstructop == PCPatchConstruct_User) {
+        ierr = PetscViewerASCIIPrintf(viewer, "Patch construction operator: user-specified\n"); CHKERRQ(ierr);
+    } else {
+        ierr = PetscViewerASCIIPrintf(viewer, "Patch construction operator: unknown\n"); CHKERRQ(ierr);
+    }
     ierr = PetscViewerASCIIPrintf(viewer, "KSP on patches (all same):\n"); CHKERRQ(ierr);
 
     if (patch->ksp) {
