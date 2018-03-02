@@ -58,9 +58,76 @@ class PlaneSmoother(object):
 
         return out
 
-class OrderedVanka(object):
+class OrderedRelaxation(object):
+    def __init__(self):
+        self.name = None
+
     @staticmethod
-    def vanka_callback(dm, entity, nclosures):
+    def callback(dm, entity, nclosures):
+        raise NotImplementedError
+
+    @staticmethod
+    def coords(dm, p):
+        coordsSection = dm.getCoordinateSection()
+        coordsDM = dm.getCoordinateDM()
+        dim = coordsDM.getDimension()
+        coordsVec = dm.getCoordinatesLocal()
+        return dm.getVecClosure(coordsSection, coordsVec, p).reshape(-1, dim).mean(axis=0)
+
+    def __call__(self, pc):
+        dm = pc.getDM()
+        prefix = pc.getOptionsPrefix()
+        sentinel = object()
+        opts = PETSc.Options(prefix)
+        name = self.name
+        assert self.name is not None
+
+        codim = opts.getInt("pc_patch_construction_%s_codim" % name, default=sentinel)
+        if codim == sentinel:
+            dim = opts.getInt("pc_patch_construction_%s_dim" % name, default=0)
+            entities = range(*dm.getDepthStratum(dim))
+        else:
+            entities = range(*dm.getHeightStratum(dim))
+
+        nclosure = opts.getInt("pc_patch_construction_%s_nclosures" % name, default=1)
+
+        sortorders = opts.getString("pc_patch_construction_%s_sort_order" % name, default=sentinel)
+        if sortorders == sentinel:
+            raise ValueError("Must set %spc_patch_construction_%s_sort_order" % (prefix, name))
+        if sortorders != "None":
+            outecs = []
+            for sortorder in sortorders.split("|"):
+                sortdata = []
+                for axis in sortorder.split(':'):
+                    ax = int(axis[0])
+                    if len(axis) > 1:
+                        sgn = {'+': 1, '-': -1}[axis[1]]
+                    else:
+                        sgn = 1
+                    sortdata.append((ax, sgn))
+
+                def keyfunc(z):
+                    return tuple(sgn*z[1][ax] for (ax, sgn) in sortdata)
+
+                ec_ = ((p, self.coords(dm, p)) for p in entities)
+                outecs = chain(outecs, sorted(ec_, key=keyfunc))
+            ec = outecs
+        else:
+            ec = ((p, self.coords(dm, p)) for p in entities)
+
+        out = []
+        for x in ec:
+            subentities = self.callback(dm, x[0], nclosure)
+            iset = PETSc.IS().createGeneral(subentities, comm=PETSc.COMM_SELF)
+            out.append(iset)
+        return out
+
+class OrderedVanka(OrderedRelaxation):
+    def __init__(self):
+        self.name = "ovanka"
+
+    @staticmethod
+    def callback(dm, entity, nclosures):
         out = set()
         out.add(entity)
 
@@ -75,63 +142,12 @@ class OrderedVanka(object):
             out = out.union(new)
         return list(out)
 
+class OrderedStar(OrderedRelaxation):
+    def __init__(self):
+        self.name = "ostar"
+
     @staticmethod
-    def coords(dm, p):
-        coordsSection = dm.getCoordinateSection()
-        coordsDM = dm.getCoordinateDM()
-        dim = coordsDM.getDimension()
-        coordsVec = dm.getCoordinatesLocal()
-        return dm.getVecClosure(coordsSection, coordsVec, p).reshape(-1, dim).mean(axis=0)
-
-    def __call__(self, pc):
-        dm = pc.getDM()
-        prefix = pc.getOptionsPrefix()
-        sentinel = object()
-        opts = PETSc.Options(prefix)
-
-        codim = opts.getInt("pc_patch_construction_ovanka_codim", default=sentinel)
-        if codim == sentinel:
-            dim = opts.getInt("pc_patch_construction_ovanka_dim", default=0)
-            entities = range(*dm.getDepthStratum(dim))
-        else:
-            entities = range(*dm.getHeightStratum(dim))
-
-        nclosure = opts.getInt("pc_patch_construction_ovanka_nclosures", default=1)
-
-        sortorders = opts.getString("pc_patch_construction_ostar_sort_order", default=sentinel)
-        if sortorders == sentinel:
-            raise ValueError("Must set %spc_patch_construction_ostar_sort_order" % prefix)
-        if sortorders != "None":
-            outecs = []
-            for sortorder in sortorders.split("|"):
-                sortdata = []
-                for axis in sortorder.split(':'):
-                    ax = int(axis[0])
-                    if len(axis) > 1:
-                        sgn = {'+': 1, '-': -1}[axis[1]]
-                    else:
-                        sgn = 1
-                    sortdata.append((ax, sgn))
-
-                def keyfunc(z):
-                    return tuple(sgn*z[1][ax] for (ax, sgn) in sortdata)
-
-                ec_ = ((p, self.coords(dm, p)) for p in entities)
-                outecs = chain(outecs, sorted(ec_, key=keyfunc))
-            ec = outecs
-        else:
-            ec = ((p, self.coords(dm, p)) for p in entities)
-
-        out = []
-        for x in ec:
-            subentities = self.vanka_callback(dm, x[0], nclosure)
-            iset = PETSc.IS().createGeneral(subentities, comm=PETSc.COMM_SELF)
-            out.append(iset)
-        return out
-
-class OrderedStar(object):
-    @staticmethod
-    def star_callback(dm, entity, nclosures):
+    def callback(dm, entity, nclosures):
         out = set()
         out.add(entity)
 
@@ -144,57 +160,3 @@ class OrderedStar(object):
             out = out.union(new)
         return list(out)
 
-    @staticmethod
-    def coords(dm, p):
-        coordsSection = dm.getCoordinateSection()
-        coordsDM = dm.getCoordinateDM()
-        dim = coordsDM.getDimension()
-        coordsVec = dm.getCoordinatesLocal()
-        return dm.getVecClosure(coordsSection, coordsVec, p).reshape(-1, dim).mean(axis=0)
-
-    def __call__(self, pc):
-        dm = pc.getDM()
-        prefix = pc.getOptionsPrefix()
-        sentinel = object()
-        opts = PETSc.Options(prefix)
-
-        codim = opts.getInt("pc_patch_construction_ostar_codim", default=sentinel)
-        if codim == sentinel:
-            dim = opts.getInt("pc_patch_construction_ostar_dim", default=0)
-            entities = range(*dm.getDepthStratum(dim))
-        else:
-            entities = range(*dm.getHeightStratum(dim))
-
-        nclosure = opts.getInt("pc_patch_construction_ostar_nclosures", default=1)
-
-        sortorders = opts.getString("pc_patch_construction_ostar_sort_order", default=sentinel)
-        if sortorders == sentinel:
-            raise ValueError("Must set %spc_patch_construction_ostar_sort_order" % prefix)
-        if sortorders != "None":
-            outecs = []
-            for sortorder in sortorders.split("|"):
-                sortdata = []
-                for axis in sortorder.split(':'):
-                    ax = int(axis[0])
-                    if len(axis) > 1:
-                        sgn = {'+': 1, '-': -1}[axis[1]]
-                    else:
-                        sgn = 1
-                    sortdata.append((ax, sgn))
-
-                def keyfunc(z):
-                    return tuple(sgn*z[1][ax] for (ax, sgn) in sortdata)
-
-                ec_ = ((p, self.coords(dm, p)) for p in entities)
-                outecs = chain(outecs, sorted(ec_, key=keyfunc))
-            ec = outecs
-        else:
-            ec = ((p, self.coords(dm, p)) for p in entities)
-
-
-        out = []
-        for x in ec:
-            subentities = self.star_callback(dm, x[0], nclosure)
-            iset = PETSc.IS().createGeneral(subentities, comm=PETSc.COMM_SELF)
-            out.append(iset)
-        return out
