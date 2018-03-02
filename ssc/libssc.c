@@ -1830,7 +1830,6 @@ static PetscErrorCode PCView_PATCH(PC pc, PetscViewer viewer)
     } else {
         ierr = PetscViewerASCIIPrintf(viewer, "Patch construction operator: unknown\n"); CHKERRQ(ierr);
     }
-    ierr = PetscViewerASCIIPrintf(viewer, "DM used to define patches:\n"); CHKERRQ(ierr);
     ierr = PetscViewerASCIIPrintf(viewer, "KSP on patches (all same):\n"); CHKERRQ(ierr);
 
     if (patch->ksp) {

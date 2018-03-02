@@ -135,11 +135,11 @@ class OrderedVanka(OrderedRelaxation):
             new = set()
             for entity in out:
                 star = dm.getTransitiveClosure(entity, useCone=False)[0]
-                for cell in star:
-                    closure = dm.getTransitiveClosure(cell, useCone=True)[0]
-                    for possible in closure:
-                        new.add(possible)
-            out = out.union(new)
+                for p in star:
+                    if p in out: continue
+                    closure = dm.getTransitiveClosure(p, useCone=True)[0]
+                    new.update(closure)
+            out.update(new)
         return list(out)
 
 class OrderedStar(OrderedRelaxation):
@@ -152,11 +152,7 @@ class OrderedStar(OrderedRelaxation):
         out.add(entity)
 
         for c in range(nclosures):
-            new = set()
-            for entity in out:
-                star = dm.getTransitiveClosure(entity, useCone=False)[0]
-                for pt in star:
-                    new.add(pt)
-            out = out.union(new)
+            star = dm.getTransitiveClosure(entity, useCone=False)[0]
+            out.update(star)
         return list(out)
 
