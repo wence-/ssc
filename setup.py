@@ -14,8 +14,6 @@ try:
     ex_flags = ex_flags.stdout.decode('utf-8')
     ex_flags = ex_flags.strip()
     ex_flags = ex_flags.split()[1:]
-    print(ex_flags)
-    print(type(ex_flags[0]))
 except IOError:
     print('Cannot query mpicxx compiler')
     print('Make sure that mpicxx exists, and returns flags with "mpicc -show"')
@@ -51,6 +49,11 @@ include_dirs += ["ssc/"]
 link_dirs = ["%s/lib" % d for d in petsc_dirs]
 
 setup(name='ssc',
+      version='0.0.1',
+      author='Lawrence Mitchell',
+      author_email='lawrence.mitchell@imperial.ac.uk',
+      description="""A package to enable easy configuration of subspace
+      solvers in PETSc from firedrake.""",
       cmdclass={'build_ext': build_ext},
       packages=["ssc"],
       ext_modules=[Extension('ssc.PatchPC',
