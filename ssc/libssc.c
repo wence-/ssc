@@ -1800,11 +1800,35 @@ static PetscErrorCode PCView_PATCH(PC pc, PetscViewer viewer)
         PetscFunctionReturn(0);
     }
     ierr = PetscViewerASCIIPushTab(viewer); CHKERRQ(ierr);
-    ierr = PetscViewerASCIIPrintf(viewer, "Vertex-patch Additive Schwarz with %d patches\n", patch->npatch); CHKERRQ(ierr);
+    ierr = PetscViewerASCIIPrintf(viewer, "Subspace Correction preconditioner with %d patches\n", patch->npatch); CHKERRQ(ierr);
+    if (patch->multiplicative) {
+        ierr = PetscViewerASCIIPrintf(viewer, "Schwarz type: multiplicative\n"); CHKERRQ(ierr);
+    } else {
+        ierr = PetscViewerASCIIPrintf(viewer, "Schwarz type: additive\n"); CHKERRQ(ierr);
+    }
+    if (patch->partition_of_unity) {
+        ierr = PetscViewerASCIIPrintf(viewer, "Weighting by partition of unity\n"); CHKERRQ(ierr);
+    } else {
+        ierr = PetscViewerASCIIPrintf(viewer, "Not weighting by partition of unity\n"); CHKERRQ(ierr);
+    }
+    if (patch->symmetrise_sweep) {
+        ierr = PetscViewerASCIIPrintf(viewer, "Symmetrising sweep (start->end, then end->start)\n"); CHKERRQ(ierr);
+    } else {
+        ierr = PetscViewerASCIIPrintf(viewer, "Not symmetrising sweep\n"); CHKERRQ(ierr);
+    }
     if (!patch->save_operators) {
         ierr = PetscViewerASCIIPrintf(viewer, "Not saving patch operators (rebuilt every PCApply)\n"); CHKERRQ(ierr);
     } else {
         ierr = PetscViewerASCIIPrintf(viewer, "Saving patch operators (rebuilt every PCSetUp)\n"); CHKERRQ(ierr);
+    }
+    if (patch->patchconstructop == PCPatchConstruct_Star) {
+        ierr = PetscViewerASCIIPrintf(viewer, "Patch construction operator: star\n"); CHKERRQ(ierr);
+    } else if (patch->patchconstructop == PCPatchConstruct_Vanka) {
+        ierr = PetscViewerASCIIPrintf(viewer, "Patch construction operator: Vanka\n"); CHKERRQ(ierr);
+    } else if (patch->patchconstructop == PCPatchConstruct_User) {
+        ierr = PetscViewerASCIIPrintf(viewer, "Patch construction operator: user-specified\n"); CHKERRQ(ierr);
+    } else {
+        ierr = PetscViewerASCIIPrintf(viewer, "Patch construction operator: unknown\n"); CHKERRQ(ierr);
     }
     ierr = PetscViewerASCIIPrintf(viewer, "DM used to define patches:\n"); CHKERRQ(ierr);
     ierr = PetscViewerASCIIPrintf(viewer, "KSP on patches (all same):\n"); CHKERRQ(ierr);
