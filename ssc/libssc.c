@@ -43,9 +43,7 @@ typedef struct {
     IS               gtol;
     IS              *bcs;
 
-    PetscSection     multBcCounts; /* these are the corresponding BC objects for just the actual */
     IS              *multBcs;      /* Only used for multiplicative smoothing to recalculate residual */
-
 
     PetscBool        save_operators; /* Save all operators (or create/destroy one at a time?) */
     PetscBool        partition_of_unity; /* Weight updates by dof multiplicity? */
@@ -70,8 +68,10 @@ typedef struct {
 
     PetscErrorCode  (*patchconstructop)(void*, DM, PetscInt, PetscHashI); /* patch construction */
     PetscInt         codim; /* dimension or codimension of entities to loop over; */
-    PetscInt         dim;   /* only oxne of them can be set */
-    PetscInt         exclude_subspace; /* What's the constraint space, when we're doing Vanka */
+    PetscInt         dim;   /* only one of them can be set */
+    PetscInt         exclude_subspace; /* If you don't want any other dofs from a particular subspace you can exclude them with this.
+                                          Used for Vanka in Stokes, for example, to eliminate all pressure dofs not on the vertex
+                                          you're building the patch around */
     PetscInt         vankadim;   /* In Vanka construction, should we eliminate any entities of a certain dimension? */
 
     PetscBool        print_patches; /* Should we print out information about patch construction? */
@@ -810,11 +810,9 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     const PetscInt *bcNodes    = NULL;
     PetscSection    gtolCounts = patch->gtolCounts;
     PetscSection    bcCounts;
-    PetscSection    multBcCounts;
     IS              gtol = patch->gtol;
     PetscHashI      globalBcs;
     PetscHashI      localBcs;
-    PetscHashI      multLocalBcs;
     PetscHashI      patchDofs;
     PetscHashI      ownedpts, seenpts, owneddofs, seendofs, artificialbcs;
     PetscHashIIter  hi;
@@ -836,7 +834,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     ierr = ISRestoreIndices(patch->ghostBcNodes, &bcNodes); CHKERRQ(ierr);
     PetscHashICreate(patchDofs);
     PetscHashICreate(localBcs);
-    PetscHashICreate(multLocalBcs);
     PetscHashICreate(ownedpts);
     PetscHashICreate(seenpts);
     PetscHashICreate(owneddofs);
@@ -850,9 +847,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     ierr = PetscMalloc1(vEnd - vStart, &patch->bcs); CHKERRQ(ierr);
 
     if (patch->multiplicative) {
-        ierr = PetscSectionCreate(PETSC_COMM_SELF, &patch->multBcCounts); CHKERRQ(ierr);
-        multBcCounts = patch->multBcCounts;
-        ierr = PetscSectionSetChart(multBcCounts, vStart, vEnd); CHKERRQ(ierr);
         ierr = PetscMalloc1(vEnd - vStart, &patch->multBcs); CHKERRQ(ierr);
     }
 
@@ -863,7 +857,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
         PetscInt multBcIndex = 0;
         PetscHashIClear(patchDofs);
         PetscHashIClear(localBcs);
-        PetscHashIClear(multLocalBcs);
         ierr = PetscSectionGetDof(gtolCounts, v, &dof); CHKERRQ(ierr);
         ierr = PetscSectionGetOffset(gtolCounts, v, &off); CHKERRQ(ierr);
 
@@ -883,17 +876,15 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
             PetscHashIHasKey(globalBcs, globalDof, flg);
             if (flg) {
                 PetscHashIAdd(localBcs, localDof, 0);
-                PetscHashIAdd(multLocalBcs, localDof, 0);
             }
         }
 
         /* If we're doing multiplicative, make the BC data structures now
            corresponding solely to actual globally imposed Dirichlet BCs */
         if (patch->multiplicative) {
-            PetscHashISize(multLocalBcs, numBcs);
-            ierr = PetscSectionSetDof(multBcCounts, v, numBcs); CHKERRQ(ierr);
+            PetscHashISize(localBcs, numBcs);
             ierr = PetscMalloc1(numBcs, &multBcsArray); CHKERRQ(ierr);
-            ierr = PetscHashIGetKeys(multLocalBcs, &multBcIndex, multBcsArray); CHKERRQ(ierr);
+            ierr = PetscHashIGetKeys(localBcs, &multBcIndex, multBcsArray); CHKERRQ(ierr);
             ierr = PetscSortInt(numBcs, multBcsArray); CHKERRQ(ierr);
             ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, multBcsArray, PETSC_OWN_POINTER, &(patch->multBcs[v - vStart])); CHKERRQ(ierr);
         }
@@ -1001,7 +992,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     PetscHashIDestroy(seenpts);
     PetscHashIDestroy(ownedpts);
     PetscHashIDestroy(localBcs);
-    PetscHashIDestroy(multLocalBcs);
     PetscHashIDestroy(patchDofs);
     PetscHashIDestroy(globalBcs);
 
@@ -1048,7 +1038,6 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     }
 
     if (patch->multiplicative) {
-        ierr = PetscSectionDestroy(&patch->multBcCounts); CHKERRQ(ierr);
         if (patch->multBcs) {
             for ( i = 0; i < patch->npatch; i++ ) {
                 ierr = ISDestroy(&patch->multBcs[i]); CHKERRQ(ierr);
