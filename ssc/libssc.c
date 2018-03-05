@@ -78,9 +78,10 @@ typedef struct {
     PetscBool        symmetrise_sweep; /* Should we sweep forwards->backwards, backwards->forwards? */
 
     IS              *userIS;
+    IS               iterationSet; /* Index set specifying how we iterate over patches */
     PetscInt         nuserIS; /* user-specified index sets to specify the patches */
     PetscBool        user_patches;
-    PetscErrorCode  (*userpatchconstructionop)(PC, PetscInt*, IS**, void* ctx);
+    PetscErrorCode  (*userpatchconstructionop)(PC, PetscInt*, IS**, IS*, void* ctx);
     void            *userpatchconstructctx;
 } PC_PATCH;
 
@@ -319,7 +320,7 @@ PETSC_EXTERN PetscErrorCode PCPatchSetComputeOperator(PC pc, PetscErrorCode (*fu
     PetscFunctionReturn(0);
 }
 
-PETSC_EXTERN PetscErrorCode PCPatchSetUserPatchConstructionOperator(PC pc, PetscErrorCode (*func)(PC, PetscInt*, IS**, void*), void* ctx)
+PETSC_EXTERN PetscErrorCode PCPatchSetUserPatchConstructionOperator(PC pc, PetscErrorCode (*func)(PC, PetscInt*, IS**, IS*, void*), void* ctx)
 {
     PC_PATCH *patch = (PC_PATCH *)pc->data;
 
@@ -452,7 +453,7 @@ static PetscErrorCode PCPatchComputeSetDifference(PetscHashI A, PetscHashI B, Pe
 }
 
 /*
- * PCPatchCreateCellPatches - create patches of cells around vertices in the mesh.
+ * PCPatchCreateCellPatches - create patches.
  *
  * Input Parameters:
  * + dm - The DMPlex object defining the mesh
@@ -496,7 +497,7 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
 
     if (patch->user_patches) {
         /* compute patch->nuserIS, patch->userIS here */
-        ierr = patch->userpatchconstructionop(pc, &patch->nuserIS, &patch->userIS, patch->userpatchconstructctx); CHKERRQ(ierr);
+        ierr = patch->userpatchconstructionop(pc, &patch->nuserIS, &patch->userIS, &patch->iterationSet, patch->userpatchconstructctx); CHKERRQ(ierr);
         vStart = 0;
         vEnd = patch->nuserIS;
     } else if (patch->codim < 0) { /* codim unset */
@@ -640,7 +641,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc)
     gtolCounts = patch->gtolCounts;
     ierr = PetscSectionSetChart(gtolCounts, vStart, vEnd); CHKERRQ(ierr);
 
-    ierr = ISGetIndices(cells, &cellsArray);
+    ierr = ISGetIndices(cells, &cellsArray); CHKERRQ(ierr);
     PetscHashICreate(ht);
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
         PetscInt dof, off;
@@ -1101,6 +1102,9 @@ static PetscErrorCode PCReset_PATCH(PC pc)
         PetscFree(patch->userIS);
         patch->nuserIS = 0;
     }
+    if (patch->iterationSet) {
+        ierr = ISDestroy(&patch->iterationSet); CHKERRQ(ierr);
+    }
 
     PetscFunctionReturn(0);
 }
@@ -1457,9 +1461,10 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     const PetscInt    *bcNodes = NULL;
     PetscInt           pStart, numBcs, size;
     PetscInt           nsweep = 1;
-    const PetscInt     start[2] = {0, patch->npatch-1};
-    const PetscInt     end[2] = {patch->npatch, 0};
+    PetscInt           start[2] = {0, patch->npatch-1};
+    PetscInt           end[2] = {patch->npatch, -1};
     const PetscInt     inc[2] = {1, -1};
+    const PetscInt    *iterationSet;
     PetscFunctionBegin;
 
     ierr = PetscLogEventBegin(PC_Patch_Apply, pc, 0, 0, 0); CHKERRQ(ierr);
@@ -1472,6 +1477,12 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecRestoreArray(patch->localX, &localX); CHKERRQ(ierr);
 
+    if (patch->user_patches) {
+        ierr = ISGetLocalSize(patch->iterationSet, &end[0]); CHKERRQ(ierr);
+        start[1] = end[0] - 1;
+        ierr = ISGetIndices(patch->iterationSet, &iterationSet); CHKERRQ(ierr);
+    }
+
     ierr = VecSet(patch->localY, 0.0); CHKERRQ(ierr);
     ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
     if (patch->symmetrise_sweep) {
@@ -1481,9 +1492,15 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     }
 
     for (PetscInt sweep = 0; sweep < nsweep; sweep++) {
-        for ( PetscInt i = start[sweep]; i < end[sweep]; i += inc[sweep] ) {
-            PetscInt start, len;
+        for ( PetscInt j = start[sweep]; j*inc[sweep] < end[sweep]*inc[sweep]; j += inc[sweep] ) {
+            PetscInt start, len, i;
             Mat multMat = NULL;
+
+            if (patch->user_patches) {
+                i = iterationSet[j];
+            } else {
+                i = j;
+            } 
 
             ierr = PetscSectionGetDof(patch->gtolCounts, i + pStart, &len); CHKERRQ(ierr);
             ierr = PetscSectionGetOffset(patch->gtolCounts, i + pStart, &start); CHKERRQ(ierr);
@@ -1559,6 +1576,10 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
                 ierr = MatDestroy(&multMat); CHKERRQ(ierr);
             }
         }
+    }
+
+    if (patch->user_patches) {
+        ierr = ISRestoreIndices(patch->iterationSet, &iterationSet); CHKERRQ(ierr);
     }
 
     if (patch->partition_of_unity && !patch->multiplicative) {
@@ -1873,6 +1894,7 @@ PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
     patch->symmetrise_sweep   = PETSC_FALSE;
     patch->nuserIS            = 0;
     patch->userIS             = NULL;
+    patch->iterationSet       = NULL;
     patch->user_patches       = PETSC_FALSE;
 
     pc->data                 = (void *)patch;
