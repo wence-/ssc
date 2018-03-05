@@ -1,8 +1,8 @@
 import numpy
-from itertools import chain
 from firedrake.petsc import PETSc
 
-__all__ = ['PlaneSmoother', 'OrderedVanka', 'OrderedStar']
+__all__ = ('PlaneSmoother', 'OrderedVanka', 'OrderedStar')
+
 
 class PlaneSmoother(object):
     @staticmethod
@@ -20,10 +20,12 @@ class PlaneSmoother(object):
 
         minx = min(entities, key=lambda z: z[1][axis])[1][axis]
         maxx = max(entities, key=lambda z: z[1][axis])[1][axis]
+
         def keyfunc(z):
             coords = tuple(z[1])
             return (coords[axis], ) + tuple(coords[:axis] + coords[axis+1:])
-        s = sorted(entities, key=keyfunc, reverse=(dir==-1))
+
+        s = sorted(entities, key=keyfunc, reverse=(dir == -1))
 
         divisions = numpy.linspace(minx, maxx, ndiv+1)
         (entities, coords) = zip(*s)
@@ -48,7 +50,7 @@ class PlaneSmoother(object):
         patches = []
         for sweep in sweeps.split(':'):
             axis = int(sweep[0])
-            dir  = {'+': +1, '-': -1}[sweep[1]]
+            dir = {'+': +1, '-': -1}[sweep[1]]
             ndiv = int(sweep[2:])
 
             entities = self.sort_entities(dm, axis, dir, ndiv)
@@ -58,6 +60,7 @@ class PlaneSmoother(object):
 
         iterationSet = PETSc.IS().createStride(size=len(patches), first=0, step=1, comm=PETSc.COMM_SELF)
         return (patches, iterationSet)
+
 
 class OrderedRelaxation(object):
     def __init__(self):
@@ -133,6 +136,7 @@ class OrderedRelaxation(object):
         piterset = PETSc.IS().createGeneral(iterset, comm=PETSc.COMM_SELF)
         return (patches, piterset)
 
+
 class OrderedVanka(OrderedRelaxation):
     def __init__(self):
         self.name = "ovanka"
@@ -153,6 +157,7 @@ class OrderedVanka(OrderedRelaxation):
 
         return list(out)
 
+
 class OrderedStar(OrderedRelaxation):
     def __init__(self):
         self.name = "ostar"
@@ -166,4 +171,3 @@ class OrderedStar(OrderedRelaxation):
             star = dm.getTransitiveClosure(entity, useCone=False)[0]
             out.update(star)
         return list(out)
-

@@ -1,7 +1,4 @@
-from __future__ import absolute_import
-
 import numpy
-import operator
 
 from ufl.algorithms import MultiFunction, map_integrands
 
