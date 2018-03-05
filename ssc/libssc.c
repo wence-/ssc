@@ -1462,7 +1462,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     PetscInt           pStart, numBcs, size;
     PetscInt           nsweep = 1;
     PetscInt           start[2] = {0, patch->npatch-1};
-    PetscInt           end[2] = {patch->npatch, 0};
+    PetscInt           end[2] = {patch->npatch, -1};
     const PetscInt     inc[2] = {1, -1};
     const PetscInt    *iterationSet;
     PetscFunctionBegin;
@@ -1492,7 +1492,7 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     }
 
     for (PetscInt sweep = 0; sweep < nsweep; sweep++) {
-        for ( PetscInt j = start[sweep]; j < end[sweep]; j += inc[sweep] ) {
+        for ( PetscInt j = start[sweep]; j*inc[sweep] < end[sweep]*inc[sweep]; j += inc[sweep] ) {
             PetscInt start, len, i;
             Mat multMat = NULL;
 
