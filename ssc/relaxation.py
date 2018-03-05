@@ -75,6 +75,17 @@ class OrderedRelaxation(object):
         coordsVec = dm.getCoordinatesLocal()
         return dm.getVecClosure(coordsSection, coordsVec, p).reshape(-1, dim).mean(axis=0)
 
+    @staticmethod
+    def get_entities(opts, name, dm):
+        sentinel = object()
+        codim = opts.getInt("pc_patch_construction_%s_codim" % name, default=sentinel)
+        if codim == sentinel:
+            dim = opts.getInt("pc_patch_construction_%s_dim" % name, default=0)
+            entities = range(*dm.getDepthStratum(dim))
+        else:
+            entities = range(*dm.getHeightStratum(dim))
+        return entities
+
     def __call__(self, pc):
         dm = pc.getDM()
         prefix = pc.getOptionsPrefix()
@@ -83,12 +94,7 @@ class OrderedRelaxation(object):
         name = self.name
         assert self.name is not None
 
-        codim = opts.getInt("pc_patch_construction_%s_codim" % name, default=sentinel)
-        if codim == sentinel:
-            dim = opts.getInt("pc_patch_construction_%s_dim" % name, default=0)
-            entities = range(*dm.getDepthStratum(dim))
-        else:
-            entities = range(*dm.getHeightStratum(dim))
+        entities = self.get_entities(opts, name, dm)
 
         nclosure = opts.getInt("pc_patch_construction_%s_nclosures" % name, default=1)
         patches = []
