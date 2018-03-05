@@ -25,6 +25,7 @@ def get_petsc_dir():
 Set the environment variable PETSC_DIR / PETSC_ARCH to your local
 PETSc base directory or install PETSc via pip.""")
 
+
 if 'CC' not in env:
     env['CC'] = "mpicc"
 
