@@ -1,7 +1,22 @@
 import numpy
+from functools import partial
 from firedrake.petsc import PETSc
 
 __all__ = ('PlaneSmoother', 'OrderedVanka', 'OrderedStar')
+
+
+def select_entity(p, dm=None, exclude=None):
+    """Filter entities based on some label.
+
+    :arg p: the entity.
+    :arg dm: the DMPlex object to query for labels.
+    :arg exclude: The label marking points to exclude."""
+    if exclude is None:
+        return True
+    else:
+        # If the exclude label marks this point (the value is not -1),
+        # we don't want it.
+        return dm.getLabelValue(exclude, p) == -1
 
 
 class PlaneSmoother(object):
@@ -16,7 +31,9 @@ class PlaneSmoother(object):
     def sort_entities(self, dm, axis, dir, ndiv):
         # compute
         # [(pStart, (x, y, z)), (pEnd, (x, y, z))]
-        entities = [(p, self.coords(dm, p)) for p in range(*dm.getChart())]
+        select = partial(select_entity, dm=dm, exclude="pyop2_ghost")
+        entities = [(p, self.coords(dm, p)) for p in
+                    filter(select, range(*dm.getChart()))]
 
         minx = min(entities, key=lambda z: z[1][axis])[1][axis]
         maxx = max(entities, key=lambda z: z[1][axis])[1][axis]
@@ -87,7 +104,8 @@ class OrderedRelaxation(object):
             entities = range(*dm.getDepthStratum(dim))
         else:
             entities = range(*dm.getHeightStratum(codim))
-        return entities
+        select = partial(select_entity, dm=dm, exclude="pyop2_ghost")
+        return list(filter(select, entities))
 
     def __call__(self, pc):
         dm = pc.getDM()
