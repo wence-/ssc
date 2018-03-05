@@ -83,7 +83,7 @@ class OrderedRelaxation(object):
             dim = opts.getInt("pc_patch_construction_%s_dim" % name, default=0)
             entities = range(*dm.getDepthStratum(dim))
         else:
-            entities = range(*dm.getHeightStratum(dim))
+            entities = range(*dm.getHeightStratum(codim))
         return entities
 
     def __call__(self, pc):
@@ -147,10 +147,10 @@ class OrderedVanka(OrderedRelaxation):
             for entity in out:
                 star = dm.getTransitiveClosure(entity, useCone=False)[0]
                 for p in star:
-                    if p in out: continue
                     closure = dm.getTransitiveClosure(p, useCone=True)[0]
                     new.update(closure)
             out.update(new)
+
         return list(out)
 
 class OrderedStar(OrderedRelaxation):
