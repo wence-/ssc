@@ -66,9 +66,11 @@ class OrderedRelaxation(object):
     def __init__(self):
         self.name = None
 
-    @staticmethod
-    def callback(dm, entity, nclosures):
+    def callback(self, dm, entity, nclosures):
         raise NotImplementedError
+
+    def set_options(self, dm, opts, name):
+        pass
 
     @staticmethod
     def coords(dm, p):
@@ -96,6 +98,8 @@ class OrderedRelaxation(object):
         opts = PETSc.Options(prefix)
         name = self.name
         assert self.name is not None
+
+        self.set_options(dm, opts, name)
 
         entities = self.get_entities(opts, name, dm)
 
@@ -141,20 +145,39 @@ class OrderedVanka(OrderedRelaxation):
     def __init__(self):
         self.name = "ovanka"
 
-    @staticmethod
-    def callback(dm, entity, nclosures):
+    def set_options(self, dm, opts, name):
+        sentinel = object()
+        exclude_dim = opts.getInt("pc_patch_construction_%s_exclude_dim" % name, default=sentinel)
+        if exclude_dim == sentinel:
+            self.exclude_dim = None
+        else:
+            self.exclude_dim = exclude_dim
+            self.exclude_range = dm.getDepthStratum(exclude_dim)
+
+    def callback(self, dm, entity, nclosures):
         out = set()
         out.add(entity)
 
-        for c in range(nclosures):
-            new = set()
-            for entity in out:
-                star = dm.getTransitiveClosure(entity, useCone=False)[0]
-                for p in star:
-                    closure = dm.getTransitiveClosure(p, useCone=True)[0]
-                    new.update(closure)
-            out.update(new)
-
+        if self.exclude_dim is None:
+            for c in range(nclosures):
+                new = set()
+                for entity in out:
+                    star = dm.getTransitiveClosure(entity, useCone=False)[0]
+                    for p in star:
+                        closure = dm.getTransitiveClosure(p, useCone=True)[0]
+                        new.update(closure)
+                out.update(new)
+        else:
+            for c in range(nclosures):
+                new = set()
+                for entity in out:
+                    star = dm.getTransitiveClosure(entity, useCone=False)[0]
+                    for p in star:
+                        closure = dm.getTransitiveClosure(p, useCone=True)[0]
+                        for x in closure:
+                            if not (self.exclude_range[0] <= x < self.exclude_range[1]):
+                                new.add(x)
+                out.update(new)
         return list(out)
 
 
@@ -162,8 +185,7 @@ class OrderedStar(OrderedRelaxation):
     def __init__(self):
         self.name = "ostar"
 
-    @staticmethod
-    def callback(dm, entity, nclosures):
+    def callback(self, dm, entity, nclosures):
         out = set()
         out.add(entity)
 
