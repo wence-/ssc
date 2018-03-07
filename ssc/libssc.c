@@ -1396,7 +1396,13 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
     /* If desired, calculate weights for dof multiplicity */
 
     if (!pc->setupcalled && patch->partition_of_unity) {
-        ierr = VecDuplicate(patch->localX, &patch->dof_weights); CHKERRQ(ierr);
+        Mat P;
+        Vec local;
+        const PetscScalar *input = NULL;
+        PetscScalar *output = NULL;
+        ierr = PCGetOperators(pc, NULL, &P); CHKERRQ(ierr);
+        ierr = MatCreateVecs(P, NULL, &patch->dof_weights);
+        ierr = VecDuplicate(patch->localX, &local); CHKERRQ(ierr);
         ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
         for ( PetscInt i = 0; i < patch->npatch; i++ ) {
             PetscInt dof;
@@ -1416,18 +1422,34 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
             ierr = VecRestoreArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
 
             ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-                                                patch->patchX[i], patch->dof_weights,
+                                                patch->patchX[i], local,
                                                 ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
         }
+        /* Local to Global */
+        ierr = VecGetArrayRead(local, &input); CHKERRQ(ierr);
+        ierr = VecGetArray(patch->dof_weights, &output); CHKERRQ(ierr);
+        ierr = PetscSFReduceBegin(patch->defaultSF, MPIU_SCALAR, input, output, MPI_SUM); CHKERRQ(ierr);
+        ierr = PetscSFReduceEnd(patch->defaultSF, MPIU_SCALAR, input, output, MPI_SUM); CHKERRQ(ierr);
+        ierr = VecRestoreArray(patch->dof_weights, &output); CHKERRQ(ierr);
+        ierr = VecRestoreArrayRead(local, &input); CHKERRQ(ierr);
+
         ierr = VecReciprocal(patch->dof_weights); CHKERRQ(ierr);
-        if(patch->partition_of_unity && patch->multiplicative)
-        {
+
+        if(patch->partition_of_unity && patch->multiplicative) {
+            /* Now Global to Local to construct patch dof weights*/
+            ierr = VecGetArrayRead(patch->dof_weights, &input); CHKERRQ(ierr);
+            ierr = VecGetArray(local, &output); CHKERRQ(ierr);
+            ierr = PetscSFBcastBegin(patch->defaultSF, MPIU_SCALAR, input, output); CHKERRQ(ierr);
+            ierr = PetscSFBcastEnd(patch->defaultSF, MPIU_SCALAR, input, output); CHKERRQ(ierr);
+            ierr = VecRestoreArrayRead(patch->dof_weights, &input); CHKERRQ(ierr);
+            ierr = VecRestoreArray(local, &output); CHKERRQ(ierr);
             for ( PetscInt i = 0; i < patch->npatch; i++ ) {
                 ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-                                                    patch->dof_weights, patch->patch_dof_weights[i],
+                                                    local, patch->patch_dof_weights[i],
                                                     INSERT_VALUES, SCATTER_FORWARD); CHKERRQ(ierr);
             }
         }
+        ierr = VecDestroy(&local); CHKERRQ(ierr);
     }
 
     if (patch->save_operators) {
@@ -1582,10 +1604,6 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
         ierr = ISRestoreIndices(patch->iterationSet, &iterationSet); CHKERRQ(ierr);
     }
 
-    if (patch->partition_of_unity && !patch->multiplicative) {
-        /* XXX: should we do this on the global vector? */
-        ierr = VecPointwiseMult(patch->localY, patch->localY, patch->dof_weights); CHKERRQ(ierr);
-    }
     /* Now patch->localY contains the solution of the patch solves, so
      * we need to combine them all. */
     ierr = VecSet(y, 0.0); CHKERRQ(ierr);
@@ -1610,6 +1628,11 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = ISRestoreIndices(patch->globalBcNodes, &bcNodes); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
+    if (patch->partition_of_unity && !patch->multiplicative) {
+        /* Now apply partition of unity */
+        ierr = VecPointwiseMult(y, y, patch->dof_weights); CHKERRQ(ierr);
+    }
+
     ierr = PetscOptionsPopGetViewerOff(); CHKERRQ(ierr);
     ierr = PetscLogEventEnd(PC_Patch_Apply, pc, 0, 0, 0); CHKERRQ(ierr);
     PetscFunctionReturn(0);
