@@ -106,8 +106,7 @@ class OrderedRelaxation(object):
             entities = range(*dm.getDepthStratum(dim))
         else:
             entities = range(*dm.getHeightStratum(codim))
-        select = partial(select_entity, dm=dm, exclude="pyop2_ghost")
-        return list(filter(select, entities))
+        return entities
 
     def __call__(self, pc):
         dm = pc.getDM()
@@ -119,7 +118,8 @@ class OrderedRelaxation(object):
 
         self.set_options(dm, opts, name)
 
-        entities = self.get_entities(opts, name, dm)
+        select = partial(select_entity, dm=dm, exclude="pyop2_ghost")
+        entities = list(filter(select, self.get_entities(opts, name, dm)))
 
         nclosure = opts.getInt("pc_patch_construction_%s_nclosures" % name, default=1)
         patches = []
