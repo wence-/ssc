@@ -953,8 +953,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
                 }
             }
             ierr = PetscSynchronizedPrintf(comm, "\n\n"); CHKERRQ(ierr);
-            ierr = PetscSynchronizedFlush(comm, PETSC_STDOUT); CHKERRQ(ierr);
-
             PetscHashIDestroy(globalbcdofs);
         }
 
@@ -982,6 +980,9 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
         ierr = PetscHashIGetKeys(localBcs, &bcIndex, bcsArray); CHKERRQ(ierr);
         ierr = PetscSortInt(numBcs, bcsArray); CHKERRQ(ierr);
         ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, bcsArray, PETSC_OWN_POINTER, &(patch->bcs[v - vStart])); CHKERRQ(ierr);
+    }
+    if (patch->print_patches) {
+        ierr = PetscSynchronizedFlush(PetscObjectComm((PetscObject)pc), PETSC_STDOUT); CHKERRQ(ierr);
     }
     if (closure) {
         ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
