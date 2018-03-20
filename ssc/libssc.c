@@ -1855,6 +1855,9 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
     ierr = PetscOptionsBool("-pc_patch_symmetrise_sweep", "Go start->end, end->start?",
                             "PCSetFromOptions_PATCH", patch->symmetrise_sweep, &patch->symmetrise_sweep, &flg); CHKERRQ(ierr);
 
+    if (patch->symmetrise_sweep && patch->multiplicative) {
+        SETERRQ(PetscObjectComm((PetscObject)pc), PETSC_ERR_USER, "Symmetrising sweep makes no sense with additive");
+    }
     ierr = PetscOptionsInt("-pc_patch_exclude_subspace", "What subspace (if any) to exclude in construction?", "PCSetFromOptions_PATCH", patch->exclude_subspace, &patch->exclude_subspace, &flg);
 
     ierr = PetscOptionsTail(); CHKERRQ(ierr);
