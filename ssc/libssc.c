@@ -1470,17 +1470,77 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
     PetscFunctionReturn(0);
 }
 
+static PetscErrorCode PCPatch_GlobalToLocal(PC_PATCH *patch, Vec g, Vec l)
+{
+    PetscErrorCode     ierr;
+    const PetscScalar *global = NULL;
+    PetscScalar       *local  = NULL;
+
+    PetscFunctionBegin;
+
+    ierr = VecGetArrayRead(g, &global); CHKERRQ(ierr);
+    ierr = VecGetArray(l, &local); CHKERRQ(ierr);
+    ierr = PetscSFBcastBegin(patch->defaultSF, MPIU_SCALAR, global, local); CHKERRQ(ierr);
+    ierr = PetscSFBcastEnd(patch->defaultSF, MPIU_SCALAR, global, local); CHKERRQ(ierr);
+    ierr = VecRestoreArray(l, &local); CHKERRQ(ierr);
+    ierr = VecRestoreArrayRead(g, &global); CHKERRQ(ierr);
+
+    PetscFunctionReturn(0);
+}
+
+static PetscErrorCode PCPatch_LocalToGlobal(PC_PATCH *patch, Vec l, Vec g)
+{
+    PetscErrorCode     ierr;
+    const PetscScalar *local  = NULL;
+    PetscScalar       *global = NULL;
+
+    PetscFunctionBegin;
+
+    ierr = VecGetArrayRead(l, &local); CHKERRQ(ierr);
+    ierr = VecGetArray(g, &global); CHKERRQ(ierr);
+    ierr = PetscSFReduceBegin(patch->defaultSF, MPIU_SCALAR, local, global, MPI_SUM); CHKERRQ(ierr);
+    ierr = PetscSFReduceEnd(patch->defaultSF, MPIU_SCALAR, local, global, MPI_SUM); CHKERRQ(ierr);
+    ierr = VecRestoreArray(g, &global); CHKERRQ(ierr);
+    ierr = VecRestoreArrayRead(l, &local); CHKERRQ(ierr);
+
+    PetscFunctionReturn(0);
+}
+
+static PetscErrorCode PCPatch_ApplyGlobalBC(PC_PATCH *patch, Vec in, Vec out)
+{
+    PetscErrorCode     ierr;
+    const PetscScalar *input   = NULL;
+    PetscScalar       *output  = NULL;
+    PetscInt           numBcs, size;
+    const PetscInt    *bcNodes = NULL;
+
+    PetscFunctionBegin;
+    ierr = VecGetArrayRead(in, &input); CHKERRQ(ierr);
+    ierr = VecGetArray(out, &output); CHKERRQ(ierr);
+    ierr = ISGetSize(patch->globalBcNodes, &numBcs); CHKERRQ(ierr);
+    ierr = ISGetIndices(patch->globalBcNodes, &bcNodes); CHKERRQ(ierr);
+    ierr = VecGetLocalSize(in, &size); CHKERRQ(ierr);
+    for ( PetscInt i = 0; i < numBcs; i++ ) {
+        const PetscInt idx = bcNodes[i];
+        if (idx < size) {
+            output[idx] = input[idx];
+        }
+    }
+
+    ierr = ISRestoreIndices(patch->globalBcNodes, &bcNodes); CHKERRQ(ierr);
+    ierr = VecRestoreArrayRead(in, &input); CHKERRQ(ierr);
+    ierr = VecRestoreArray(out, &output); CHKERRQ(ierr);
+
+    PetscFunctionReturn(0);
+}
+
 static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
 {
     PetscErrorCode     ierr;
     PC_PATCH          *patch   = (PC_PATCH *)pc->data;
-    const PetscScalar *globalX = NULL;
-    PetscScalar       *localX  = NULL;
-    PetscScalar       *localY  = NULL;
-    PetscScalar       *globalY = NULL;
     PetscScalar       *patchX  = NULL;
     const PetscInt    *bcNodes = NULL;
-    PetscInt           pStart, numBcs, size;
+    PetscInt           pStart, numBcs;
     PetscInt           nsweep = 1;
     PetscInt           start[2] = {0, patch->npatch-1};
     PetscInt           end[2] = {patch->npatch, -1};
@@ -1490,13 +1550,6 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
 
     ierr = PetscLogEventBegin(PC_Patch_Apply, pc, 0, 0, 0); CHKERRQ(ierr);
     ierr = PetscOptionsPushGetViewerOff(PETSC_TRUE); CHKERRQ(ierr);
-    /* Scatter from global space into overlapped local spaces */
-    ierr = VecGetArrayRead(x, &globalX); CHKERRQ(ierr);
-    ierr = VecGetArray(patch->localX, &localX); CHKERRQ(ierr);
-    ierr = PetscSFBcastBegin(patch->defaultSF, MPIU_SCALAR, globalX, localX); CHKERRQ(ierr);
-    ierr = PetscSFBcastEnd(patch->defaultSF, MPIU_SCALAR, globalX, localX); CHKERRQ(ierr);
-    ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
-    ierr = VecRestoreArray(patch->localX, &localX); CHKERRQ(ierr);
 
     if (patch->user_patches) {
         ierr = ISGetLocalSize(patch->iterationSet, &end[0]); CHKERRQ(ierr);
@@ -1506,11 +1559,14 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
 
     ierr = VecSet(patch->localY, 0.0); CHKERRQ(ierr);
     ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
-    if (patch->symmetrise_sweep) {
+    if (patch->symmetrise_sweep && patch->multiplicative) {
+        /* TODO, make symmetrising work with additive? */
         nsweep = 2;
     } else {
         nsweep = 1;
     }
+
+    ierr = PCPatch_GlobalToLocal(patch, x, patch->localX); CHKERRQ(ierr);
 
     for (PetscInt sweep = 0; sweep < nsweep; sweep++) {
         for ( PetscInt j = start[sweep]; j*inc[sweep] < end[sweep]*inc[sweep]; j += inc[sweep] ) {
@@ -1599,36 +1655,16 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
             }
         }
     }
+    /* Now patch->localY contains the solution of the patch solves, so
+     * we need to combine them all. */
+    ierr = VecSet(y, 0.0); CHKERRQ(ierr);
+    ierr = PCPatch_LocalToGlobal(patch, patch->localY, y); CHKERRQ(ierr);
+    /* Now we need to send the global BC values through */
+    ierr = PCPatch_ApplyGlobalBC(patch, x, y); CHKERRQ(ierr);
 
     if (patch->user_patches) {
         ierr = ISRestoreIndices(patch->iterationSet, &iterationSet); CHKERRQ(ierr);
     }
-
-    /* Now patch->localY contains the solution of the patch solves, so
-     * we need to combine them all. */
-    ierr = VecSet(y, 0.0); CHKERRQ(ierr);
-    ierr = VecGetArray(y, &globalY); CHKERRQ(ierr);
-    ierr = VecGetArrayRead(patch->localY, (const PetscScalar **)&localY); CHKERRQ(ierr);
-    ierr = PetscSFReduceBegin(patch->defaultSF, MPIU_SCALAR, localY, globalY, MPI_SUM); CHKERRQ(ierr);
-    ierr = PetscSFReduceEnd(patch->defaultSF, MPIU_SCALAR, localY, globalY, MPI_SUM); CHKERRQ(ierr);
-    ierr = VecRestoreArrayRead(patch->localY, (const PetscScalar **)&localY); CHKERRQ(ierr);
-
-    /* Now we need to send the global BC values through */
-    ierr = VecGetArrayRead(x, &globalX); CHKERRQ(ierr);
-    ierr = ISGetSize(patch->globalBcNodes, &numBcs); CHKERRQ(ierr);
-    ierr = ISGetIndices(patch->globalBcNodes, &bcNodes); CHKERRQ(ierr);
-    ierr = VecGetLocalSize(x, &size); CHKERRQ(ierr);
-    for ( PetscInt i = 0; i < numBcs; i++ ) {
-        const PetscInt idx = bcNodes[i];
-        if (idx < size) {
-            globalY[idx] = globalX[idx];
-        }
-    }
-
-    ierr = ISRestoreIndices(patch->globalBcNodes, &bcNodes); CHKERRQ(ierr);
-    ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
-    ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
-
     ierr = PetscOptionsPopGetViewerOff(); CHKERRQ(ierr);
     ierr = PetscLogEventEnd(PC_Patch_Apply, pc, 0, 0, 0); CHKERRQ(ierr);
     PetscFunctionReturn(0);
