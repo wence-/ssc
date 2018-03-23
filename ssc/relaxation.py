@@ -207,7 +207,13 @@ class OrderedStar(OrderedRelaxation):
         out = set()
         out.add(entity)
 
-        for c in range(nclosures):
-            star = dm.getTransitiveClosure(entity, useCone=False)[0]
+        candidates = set([entity])
+
+        while candidates:
+            e = candidates.pop()
+            star, _ = dm.getTransitiveClosure(e, useCone=False)
+            nclosures -= 1
+            if nclosures > 0:
+                candidates.update(star)
             out.update(star)
         return list(out)
