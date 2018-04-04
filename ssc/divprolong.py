@@ -4,6 +4,7 @@ from tsfc.fiatinterface import create_element
 import firedrake.utils as utils
 from numpy import where, unique
 
+
 def fix_coarse_boundaries(cV, fV):
     # With lots of help from Lawrence Mitchell
     c2fmap = coarse_to_fine_node_map(cV, fV)
@@ -38,7 +39,6 @@ def fix_coarse_boundaries(cV, fV):
     return bc
 
 
-
 class DivProlong(PCBase):
 
     def __init__(self, J, bcs):
@@ -52,8 +52,6 @@ class DivProlong(PCBase):
         appctx = self.context.appctx
 
         cmesh = appctx["cmesh"]
-        fmesh = appctx["fmesh"]
-        vmesh = appctx["vmesh"]
         self.fV = appctx["fV"]
         self.cV = FunctionSpace(cmesh, self.fV.ufl_element())
         self.fix = fix_coarse_boundaries(self.cV, self.fV)
@@ -61,8 +59,6 @@ class DivProlong(PCBase):
         self.gamma = appctx["gamma"]
         self.exactparams = appctx["exactparams"]
         # self.f = appctx["f"]
-        
-        pass
 
     def update(self, pc):
         pass
@@ -80,6 +76,7 @@ class DivProlong(PCBase):
         Re = self.Re
         gamma = self.gamma
         u = TrialFunction(self.fV)
+
         def ah(u, v):
             # FIXME: should cell_avg be there?
             return 1.0/Re * inner(grad(u), grad(v))*dx + gamma * inner(div(u), div(v))*dx
@@ -99,15 +96,8 @@ class DivProlong(PCBase):
         with cuf.dat.vec as x_:
             x_.copy(y)
 
-
     def applyTranspose(self, pc, x, y):
         raise NotImplementedError("Haven't coded DivProlong-applyTranspose")
 
     def view(self, pc, viewer=None):
         pass
-        # if viewer is None:
-        #     viewer = PETSc.Viewer.STDOUT
-        # viewer.printfASCII("Low-order PC\n")
-        # viewer.pushASCIITab()
-        # self.lo.view(viewer)
-        # viewer.popASCIITab()

@@ -78,9 +78,10 @@ typedef struct {
     PetscBool        symmetrise_sweep; /* Should we sweep forwards->backwards, backwards->forwards? */
 
     IS              *userIS;
+    IS               iterationSet; /* Index set specifying how we iterate over patches */
     PetscInt         nuserIS; /* user-specified index sets to specify the patches */
     PetscBool        user_patches;
-    PetscErrorCode  (*userpatchconstructionop)(PC, PetscInt*, IS**, void* ctx);
+    PetscErrorCode  (*userpatchconstructionop)(PC, PetscInt*, IS**, IS*, void* ctx);
     void            *userpatchconstructctx;
 } PC_PATCH;
 
@@ -319,7 +320,7 @@ PETSC_EXTERN PetscErrorCode PCPatchSetComputeOperator(PC pc, PetscErrorCode (*fu
     PetscFunctionReturn(0);
 }
 
-PETSC_EXTERN PetscErrorCode PCPatchSetUserPatchConstructionOperator(PC pc, PetscErrorCode (*func)(PC, PetscInt*, IS**, void*), void* ctx)
+PETSC_EXTERN PetscErrorCode PCPatchSetUserPatchConstructionOperator(PC pc, PetscErrorCode (*func)(PC, PetscInt*, IS**, IS*, void*), void* ctx)
 {
     PC_PATCH *patch = (PC_PATCH *)pc->data;
 
@@ -452,7 +453,7 @@ static PetscErrorCode PCPatchComputeSetDifference(PetscHashI A, PetscHashI B, Pe
 }
 
 /*
- * PCPatchCreateCellPatches - create patches of cells around vertices in the mesh.
+ * PCPatchCreateCellPatches - create patches.
  *
  * Input Parameters:
  * + dm - The DMPlex object defining the mesh
@@ -496,7 +497,7 @@ static PetscErrorCode PCPatchCreateCellPatches(PC pc)
 
     if (patch->user_patches) {
         /* compute patch->nuserIS, patch->userIS here */
-        ierr = patch->userpatchconstructionop(pc, &patch->nuserIS, &patch->userIS, patch->userpatchconstructctx); CHKERRQ(ierr);
+        ierr = patch->userpatchconstructionop(pc, &patch->nuserIS, &patch->userIS, &patch->iterationSet, patch->userpatchconstructctx); CHKERRQ(ierr);
         vStart = 0;
         vEnd = patch->nuserIS;
     } else if (patch->codim < 0) { /* codim unset */
@@ -640,7 +641,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc)
     gtolCounts = patch->gtolCounts;
     ierr = PetscSectionSetChart(gtolCounts, vStart, vEnd); CHKERRQ(ierr);
 
-    ierr = ISGetIndices(cells, &cellsArray);
+    ierr = ISGetIndices(cells, &cellsArray); CHKERRQ(ierr);
     PetscHashICreate(ht);
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
         PetscInt dof, off;
@@ -952,8 +953,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
                 }
             }
             ierr = PetscSynchronizedPrintf(comm, "\n\n"); CHKERRQ(ierr);
-            ierr = PetscSynchronizedFlush(comm, PETSC_STDOUT); CHKERRQ(ierr);
-
             PetscHashIDestroy(globalbcdofs);
         }
 
@@ -981,6 +980,9 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
         ierr = PetscHashIGetKeys(localBcs, &bcIndex, bcsArray); CHKERRQ(ierr);
         ierr = PetscSortInt(numBcs, bcsArray); CHKERRQ(ierr);
         ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, bcsArray, PETSC_OWN_POINTER, &(patch->bcs[v - vStart])); CHKERRQ(ierr);
+    }
+    if (patch->print_patches) {
+        ierr = PetscSynchronizedFlush(PetscObjectComm((PetscObject)pc), PETSC_STDOUT); CHKERRQ(ierr);
     }
     if (closure) {
         ierr = DMPlexRestoreTransitiveClosure(dm, 0, PETSC_TRUE, &closureSize, &closure); CHKERRQ(ierr);
@@ -1100,6 +1102,9 @@ static PetscErrorCode PCReset_PATCH(PC pc)
         }
         PetscFree(patch->userIS);
         patch->nuserIS = 0;
+    }
+    if (patch->iterationSet) {
+        ierr = ISDestroy(&patch->iterationSet); CHKERRQ(ierr);
     }
 
     PetscFunctionReturn(0);
@@ -1392,7 +1397,13 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
     /* If desired, calculate weights for dof multiplicity */
 
     if (!pc->setupcalled && patch->partition_of_unity) {
-        ierr = VecDuplicate(patch->localX, &patch->dof_weights); CHKERRQ(ierr);
+        Mat P;
+        Vec local;
+        const PetscScalar *input = NULL;
+        PetscScalar *output = NULL;
+        ierr = PCGetOperators(pc, NULL, &P); CHKERRQ(ierr);
+        ierr = MatCreateVecs(P, NULL, &patch->dof_weights);
+        ierr = VecDuplicate(patch->localX, &local); CHKERRQ(ierr);
         ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
         for ( PetscInt i = 0; i < patch->npatch; i++ ) {
             PetscInt dof;
@@ -1412,18 +1423,34 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
             ierr = VecRestoreArray(patch->patchX[i], &patchX); CHKERRQ(ierr);
 
             ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-                                                patch->patchX[i], patch->dof_weights,
+                                                patch->patchX[i], local,
                                                 ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
         }
+        /* Local to Global */
+        ierr = VecGetArrayRead(local, &input); CHKERRQ(ierr);
+        ierr = VecGetArray(patch->dof_weights, &output); CHKERRQ(ierr);
+        ierr = PetscSFReduceBegin(patch->defaultSF, MPIU_SCALAR, input, output, MPI_SUM); CHKERRQ(ierr);
+        ierr = PetscSFReduceEnd(patch->defaultSF, MPIU_SCALAR, input, output, MPI_SUM); CHKERRQ(ierr);
+        ierr = VecRestoreArray(patch->dof_weights, &output); CHKERRQ(ierr);
+        ierr = VecRestoreArrayRead(local, &input); CHKERRQ(ierr);
+
         ierr = VecReciprocal(patch->dof_weights); CHKERRQ(ierr);
-        if(patch->partition_of_unity && patch->multiplicative)
-        {
+
+        if(patch->partition_of_unity && patch->multiplicative) {
+            /* Now Global to Local to construct patch dof weights*/
+            ierr = VecGetArrayRead(patch->dof_weights, &input); CHKERRQ(ierr);
+            ierr = VecGetArray(local, &output); CHKERRQ(ierr);
+            ierr = PetscSFBcastBegin(patch->defaultSF, MPIU_SCALAR, input, output); CHKERRQ(ierr);
+            ierr = PetscSFBcastEnd(patch->defaultSF, MPIU_SCALAR, input, output); CHKERRQ(ierr);
+            ierr = VecRestoreArrayRead(patch->dof_weights, &input); CHKERRQ(ierr);
+            ierr = VecRestoreArray(local, &output); CHKERRQ(ierr);
             for ( PetscInt i = 0; i < patch->npatch; i++ ) {
                 ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-                                                    patch->dof_weights, patch->patch_dof_weights[i],
+                                                    local, patch->patch_dof_weights[i],
                                                     INSERT_VALUES, SCATTER_FORWARD); CHKERRQ(ierr);
             }
         }
+        ierr = VecDestroy(&local); CHKERRQ(ierr);
     }
 
     if (patch->save_operators) {
@@ -1457,9 +1484,10 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     const PetscInt    *bcNodes = NULL;
     PetscInt           pStart, numBcs, size;
     PetscInt           nsweep = 1;
-    const PetscInt     start[2] = {0, patch->npatch-1};
-    const PetscInt     end[2] = {patch->npatch, 0};
+    PetscInt           start[2] = {0, patch->npatch-1};
+    PetscInt           end[2] = {patch->npatch, -1};
     const PetscInt     inc[2] = {1, -1};
+    const PetscInt    *iterationSet;
     PetscFunctionBegin;
 
     ierr = PetscLogEventBegin(PC_Patch_Apply, pc, 0, 0, 0); CHKERRQ(ierr);
@@ -1472,6 +1500,12 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecRestoreArray(patch->localX, &localX); CHKERRQ(ierr);
 
+    if (patch->user_patches) {
+        ierr = ISGetLocalSize(patch->iterationSet, &end[0]); CHKERRQ(ierr);
+        start[1] = end[0] - 1;
+        ierr = ISGetIndices(patch->iterationSet, &iterationSet); CHKERRQ(ierr);
+    }
+
     ierr = VecSet(patch->localY, 0.0); CHKERRQ(ierr);
     ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, NULL); CHKERRQ(ierr);
     if (patch->symmetrise_sweep) {
@@ -1481,9 +1515,15 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     }
 
     for (PetscInt sweep = 0; sweep < nsweep; sweep++) {
-        for ( PetscInt i = start[sweep]; i < end[sweep]; i += inc[sweep] ) {
-            PetscInt start, len;
+        for ( PetscInt j = start[sweep]; j*inc[sweep] < end[sweep]*inc[sweep]; j += inc[sweep] ) {
+            PetscInt start, len, i;
             Mat multMat = NULL;
+
+            if (patch->user_patches) {
+                i = iterationSet[j];
+            } else {
+                i = j;
+            } 
 
             ierr = PetscSectionGetDof(patch->gtolCounts, i + pStart, &len); CHKERRQ(ierr);
             ierr = PetscSectionGetOffset(patch->gtolCounts, i + pStart, &start); CHKERRQ(ierr);
@@ -1561,10 +1601,10 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
         }
     }
 
-    if (patch->partition_of_unity && !patch->multiplicative) {
-        /* XXX: should we do this on the global vector? */
-        ierr = VecPointwiseMult(patch->localY, patch->localY, patch->dof_weights); CHKERRQ(ierr);
+    if (patch->user_patches) {
+        ierr = ISRestoreIndices(patch->iterationSet, &iterationSet); CHKERRQ(ierr);
     }
+
     /* Now patch->localY contains the solution of the patch solves, so
      * we need to combine them all. */
     ierr = VecSet(y, 0.0); CHKERRQ(ierr);
@@ -1589,6 +1629,11 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = ISRestoreIndices(patch->globalBcNodes, &bcNodes); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
+    if (patch->partition_of_unity && !patch->multiplicative) {
+        /* Now apply partition of unity */
+        ierr = VecPointwiseMult(y, y, patch->dof_weights); CHKERRQ(ierr);
+    }
+
     ierr = PetscOptionsPopGetViewerOff(); CHKERRQ(ierr);
     ierr = PetscLogEventEnd(PC_Patch_Apply, pc, 0, 0, 0); CHKERRQ(ierr);
     PetscFunctionReturn(0);
@@ -1873,6 +1918,7 @@ PETSC_EXTERN PetscErrorCode PCCreate_PATCH(PC pc)
     patch->symmetrise_sweep   = PETSC_FALSE;
     patch->nuserIS            = 0;
     patch->userIS             = NULL;
+    patch->iterationSet       = NULL;
     patch->user_patches       = PETSC_FALSE;
 
     pc->data                 = (void *)patch;
