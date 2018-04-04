@@ -1375,6 +1375,7 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
         ierr = PCGetOptionsPrefix(pc, &prefix); CHKERRQ(ierr);
         for ( PetscInt i = 0; i < patch->npatch; i++ ) {
             ierr = KSPCreate(PETSC_COMM_SELF, patch->ksp + i); CHKERRQ(ierr);
+            ierr = PetscObjectIncrementTabLevel((PetscObject)patch->ksp[i], (PetscObject)pc, 1); CHKERRQ(ierr);
             ierr = KSPSetOptionsPrefix(patch->ksp[i], prefix); CHKERRQ(ierr);
             ierr = KSPAppendOptionsPrefix(patch->ksp[i], "sub_"); CHKERRQ(ierr);
         }
