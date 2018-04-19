@@ -261,6 +261,7 @@ class PatchPC(PCBase):
         patch.setOperators(A, P)
         patch.setType("patch")
         patch = setup_patch_pc(patch, J, bcs)
+        patch.setAttr("ctx", ctx)
         patch.incrementTabLevel(1, parent=pc)
         patch.setFromOptions()
         self.patch = patch
