@@ -43,8 +43,6 @@ typedef struct {
     IS               gtol;
     IS              *bcs;
 
-    IS              *multBcs;      /* Only used for multiplicative smoothing to recalculate residual */
-
     PetscBool        save_operators; /* Save all operators (or create/destroy one at a time?) */
     PetscBool        partition_of_unity; /* Weight updates by dof multiplicity? */
     PetscBool        multiplicative; /* Gauss-Seidel or Jacobi? */
@@ -61,7 +59,6 @@ typedef struct {
     Vec             *patchX, *patchY; /* Work vectors for patches */
     Vec             *patch_dof_weights;
     Mat             *mat;        /* Operators */
-    Mat             *multMat;        /* Operators for multiplicative residual calculation */
     MatType          sub_mat_type;
     PetscErrorCode  (*usercomputeop)(PC, Mat, PetscInt, const PetscInt *, PetscInt, const PetscInt *, void *);
     void            *usercomputectx;
@@ -100,15 +97,6 @@ PETSC_EXTERN PetscErrorCode PCPatchSetPartitionOfUnity(PC pc, PetscBool flg)
     PetscFunctionBegin;
 
     patch->partition_of_unity = flg;
-    PetscFunctionReturn(0);
-}
-
-PETSC_EXTERN PetscErrorCode PCPatchSetMultiplicative(PC pc, PetscBool flg)
-{
-    PC_PATCH       *patch = (PC_PATCH *)pc->data;
-    PetscFunctionBegin;
-
-    patch->multiplicative = flg;
     PetscFunctionReturn(0);
 }
 
@@ -652,6 +640,8 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc)
 
         if ( dof <= 0 ) continue;
 
+        /* PEF: calculate the BC dofs here first */
+
         for ( PetscInt k = 0; k < patch->nsubspaces; k++ ) {
             PetscInt nodesPerCell = patch->nodesPerCell[k];
             PetscInt subspaceOffset = patch->subspaceOffsets[k];
@@ -775,6 +765,8 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc)
                             const PetscInt globalDof = cellNodeMap[cell*nodesPerCell + j]*bs + subspaceOffset + l;
                             PetscInt localDof;
                             PetscHashIMap(ht, globalDof, localDof);
+
+                            /* PEF: check if it's in the artificial BCs */
                             asmArray[asmKey++] = localDof;
                         }
                     }
@@ -847,10 +839,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
     ierr = PetscSectionSetChart(bcCounts, vStart, vEnd); CHKERRQ(ierr);
     ierr = PetscMalloc1(vEnd - vStart, &patch->bcs); CHKERRQ(ierr);
 
-    if (patch->multiplicative) {
-        ierr = PetscMalloc1(vEnd - vStart, &patch->multBcs); CHKERRQ(ierr);
-    }
-
     ierr = ISGetIndices(gtol, &gtolArray); CHKERRQ(ierr);
     for ( PetscInt v = vStart; v < vEnd; v++ ) {
         PetscInt numBcs, dof, off;
@@ -863,9 +851,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
 
         if ( dof <= 0 ) {
             patch->bcs[v - vStart] = NULL;
-            if (patch->multiplicative) {
-                patch->multBcs[v - vStart] = NULL;
-            }
             continue;
         }
 
@@ -878,16 +863,6 @@ static PetscErrorCode PCPatchCreateCellPatchBCs(PC pc)
             if (flg) {
                 PetscHashIAdd(localBcs, localDof, 0);
             }
-        }
-
-        /* If we're doing multiplicative, make the BC data structures now
-           corresponding solely to actual globally imposed Dirichlet BCs */
-        if (patch->multiplicative) {
-            PetscHashISize(localBcs, numBcs);
-            ierr = PetscMalloc1(numBcs, &multBcsArray); CHKERRQ(ierr);
-            ierr = PetscHashIGetKeys(localBcs, &multBcIndex, multBcsArray); CHKERRQ(ierr);
-            ierr = PetscSortInt(numBcs, multBcsArray); CHKERRQ(ierr);
-            ierr = ISCreateGeneral(PETSC_COMM_SELF, numBcs, multBcsArray, PETSC_OWN_POINTER, &(patch->multBcs[v - vStart])); CHKERRQ(ierr);
         }
 
         /* Now figure out the artificial BCs: the set difference of {dofs on entities
@@ -1039,15 +1014,6 @@ static PetscErrorCode PCReset_PATCH(PC pc)
         ierr = PetscFree(patch->bcs); CHKERRQ(ierr);
     }
 
-    if (patch->multiplicative) {
-        if (patch->multBcs) {
-            for ( i = 0; i < patch->npatch; i++ ) {
-                ierr = ISDestroy(&patch->multBcs[i]); CHKERRQ(ierr);
-            }
-            ierr = PetscFree(patch->multBcs); CHKERRQ(ierr);
-        }
-    }
-
     if (patch->ksp) {
         for ( i = 0; i < patch->npatch; i++ ) {
             ierr = KSPReset(patch->ksp[i]); CHKERRQ(ierr);
@@ -1082,14 +1048,8 @@ static PetscErrorCode PCReset_PATCH(PC pc)
     if (patch->mat) {
         for ( i = 0; i < patch->npatch; i++ ) {
             ierr = MatDestroy(patch->mat + i); CHKERRQ(ierr);
-            if (patch->multiplicative) {
-                ierr = MatDestroy(patch->multMat + i); CHKERRQ(ierr);
-            }
         }
         ierr = PetscFree(patch->mat); CHKERRQ(ierr);
-        if (patch->multiplicative) {
-            ierr = PetscFree(patch->multMat); CHKERRQ(ierr);
-        }
     }
     ierr = PetscFree(patch->sub_mat_type); CHKERRQ(ierr);
 
@@ -1276,10 +1236,6 @@ static PetscErrorCode PCPatchComputeOperator(PC pc, Mat mat, Mat multMat, PetscI
     ierr = ISRestoreIndices(patch->cells, &cellsArray); CHKERRQ(ierr);
 
     /* Apply boundary conditions.  Could also do this through the local_to_patch guy. */
-    if (patch->multiplicative) {
-        ierr = MatCopy(mat, multMat, SAME_NONZERO_PATTERN); CHKERRQ(ierr);
-        ierr = MatZeroRowsColumnsIS(multMat, patch->multBcs[which-pStart], (PetscScalar)1.0, NULL, NULL); CHKERRQ(ierr);
-    }
     ierr = MatZeroRowsColumnsIS(mat, patch->bcs[which-pStart], (PetscScalar)1.0, NULL, NULL); CHKERRQ(ierr);
     ierr = PetscLogEventEnd(PC_Patch_ComputeOp, pc, 0, 0, 0); CHKERRQ(ierr);
     PetscFunctionReturn(0);
@@ -1356,8 +1312,6 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
         ierr = PetscSectionGetChart(patch->gtolCounts, &pStart, &pEnd); CHKERRQ(ierr);
         ierr = PetscMalloc1(patch->npatch, &patch->patchX); CHKERRQ(ierr);
         ierr = PetscMalloc1(patch->npatch, &patch->patchY); CHKERRQ(ierr);
-        if(patch->partition_of_unity && patch->multiplicative)
-            ierr = PetscMalloc1(patch->npatch, &patch->patch_dof_weights); CHKERRQ(ierr);
 
         for ( PetscInt i = pStart; i < pEnd; i++ ) {
             PetscInt dof;
@@ -1366,10 +1320,6 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
             ierr = VecSetUp(patch->patchX[i - pStart]); CHKERRQ(ierr);
             ierr = VecCreateSeq(PETSC_COMM_SELF, dof, &patch->patchY[i - pStart]); CHKERRQ(ierr);
             ierr = VecSetUp(patch->patchY[i - pStart]); CHKERRQ(ierr);
-            if(patch->partition_of_unity && patch->multiplicative) {
-                ierr = VecCreateSeq(PETSC_COMM_SELF, dof, &patch->patch_dof_weights[i - pStart]); CHKERRQ(ierr);
-                ierr = VecSetUp(patch->patch_dof_weights[i - pStart]); CHKERRQ(ierr);
-            }
         }
         ierr = PetscMalloc1(patch->npatch, &patch->ksp); CHKERRQ(ierr);
         ierr = PCGetOptionsPrefix(pc, &prefix); CHKERRQ(ierr);
@@ -1381,15 +1331,8 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
         }
         if (patch->save_operators) {
             ierr = PetscMalloc1(patch->npatch, &patch->mat); CHKERRQ(ierr);
-            if (patch->multiplicative) {
-                ierr = PetscMalloc1(patch->npatch, &patch->multMat); CHKERRQ(ierr);
-            }
             for ( PetscInt i = 0; i < patch->npatch; i++ ) {
                 ierr = PCPatchCreateMatrix(pc, i, patch->mat + i); CHKERRQ(ierr);
-                if (patch->multiplicative) {
-                    ierr = MatDuplicate(patch->mat[i], MAT_SHARE_NONZERO_PATTERN,
-                                        patch->multMat + i); CHKERRQ(ierr);
-                }
             }
         }
         ierr = PetscLogEventEnd(PC_Patch_CreatePatches, pc, 0, 0, 0); CHKERRQ(ierr);
@@ -1436,32 +1379,13 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
         ierr = VecRestoreArrayRead(local, &input); CHKERRQ(ierr);
 
         ierr = VecReciprocal(patch->dof_weights); CHKERRQ(ierr);
-
-        if(patch->partition_of_unity && patch->multiplicative) {
-            /* Now Global to Local to construct patch dof weights*/
-            ierr = VecGetArrayRead(patch->dof_weights, &input); CHKERRQ(ierr);
-            ierr = VecGetArray(local, &output); CHKERRQ(ierr);
-            ierr = PetscSFBcastBegin(patch->defaultSF, MPIU_SCALAR, input, output); CHKERRQ(ierr);
-            ierr = PetscSFBcastEnd(patch->defaultSF, MPIU_SCALAR, input, output); CHKERRQ(ierr);
-            ierr = VecRestoreArrayRead(patch->dof_weights, &input); CHKERRQ(ierr);
-            ierr = VecRestoreArray(local, &output); CHKERRQ(ierr);
-            for ( PetscInt i = 0; i < patch->npatch; i++ ) {
-                ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-                                                    local, patch->patch_dof_weights[i],
-                                                    INSERT_VALUES, SCATTER_FORWARD); CHKERRQ(ierr);
-            }
-        }
         ierr = VecDestroy(&local); CHKERRQ(ierr);
     }
 
     if (patch->save_operators) {
         for ( PetscInt i = 0; i < patch->npatch; i++ ) {
             ierr = MatZeroEntries(patch->mat[i]); CHKERRQ(ierr);
-            if (patch->multiplicative) {
-                ierr = PCPatchComputeOperator(pc, patch->mat[i], patch->multMat[i], i); CHKERRQ(ierr);
-            } else {
-                ierr = PCPatchComputeOperator(pc, patch->mat[i], NULL, i); CHKERRQ(ierr);
-            }
+            ierr = PCPatchComputeOperator(pc, patch->mat[i], NULL, i); CHKERRQ(ierr);
             ierr = KSPSetOperators(patch->ksp[i], patch->mat[i], patch->mat[i]); CHKERRQ(ierr);
         }
     }
@@ -1550,18 +1474,11 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
             if (!patch->save_operators) {
                 Mat mat;
                 ierr = PCPatchCreateMatrix(pc, i, &mat); CHKERRQ(ierr);
-                if (patch->multiplicative) {
-                    ierr = MatDuplicate(mat, MAT_SHARE_NONZERO_PATTERN, &multMat); CHKERRQ(ierr);
-                }
                 /* Populate operator here. */
                 ierr = PCPatchComputeOperator(pc, mat, multMat, i); CHKERRQ(ierr);
                 ierr = KSPSetOperators(patch->ksp[i], mat, mat);
                 /* Drop reference so the KSPSetOperators below will blow it away. */
                 ierr = MatDestroy(&mat); CHKERRQ(ierr);
-            }
-
-            if (patch->save_operators && patch->multiplicative) {
-                multMat = patch->multMat[i];
             }
 
             ierr = PetscLogEventBegin(PC_Patch_Solve, pc, 0, 0, 0); CHKERRQ(ierr);
@@ -1575,30 +1492,9 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
                 ierr = PCReset(pc); CHKERRQ(ierr);
             }
 
-            if(patch->partition_of_unity && patch->multiplicative)
-                ierr = VecPointwiseMult(patch->patchY[i],
-                                        patch->patchY[i],
-                                        patch->patch_dof_weights[i]); CHKERRQ(ierr);
-
             ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
                                                 patch->patchY[i], patch->localY,
                                                 ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
-
-            /* Get the matrix on the patch but with only global bcs applied.
-             * This matrix is then multiplied with the result from the previous solve
-             * to obtain by how much the residual changes. */
-
-            if(patch->multiplicative){
-                ierr = MatMult(multMat, patch->patchY[i], patch->patchX[i]); CHKERRQ(ierr);
-                ierr = VecScale(patch->patchX[i], -1.0); CHKERRQ(ierr);
-                ierr = PCPatch_ScatterLocal_Private(pc, i + pStart,
-                                                    patch->patchX[i], patch->localX,
-                                                    ADD_VALUES, SCATTER_REVERSE); CHKERRQ(ierr);
-            }
-
-            if (patch->multiplicative && !patch->save_operators) {
-                ierr = MatDestroy(&multMat); CHKERRQ(ierr);
-            }
         }
     }
 
@@ -1630,10 +1526,6 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = ISRestoreIndices(patch->globalBcNodes, &bcNodes); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
-    if (patch->partition_of_unity && !patch->multiplicative) {
-        /* Now apply partition of unity */
-        ierr = VecPointwiseMult(y, y, patch->dof_weights); CHKERRQ(ierr);
-    }
 
     ierr = PetscOptionsPopGetViewerOff(); CHKERRQ(ierr);
     ierr = PetscLogEventEnd(PC_Patch_Apply, pc, 0, 0, 0); CHKERRQ(ierr);
@@ -1782,6 +1674,9 @@ static PetscErrorCode PCSetFromOptions_PATCH(PetscOptionItems *PetscOptionsObjec
 
     ierr = PetscOptionsBool("-pc_patch_multiplicative", "Gauss-Seidel instead of Jacobi?",
                             "PCPatchSetMultiplicative", patch->multiplicative, &patch->multiplicative, &flg); CHKERRQ(ierr);
+    if (patch->multiplicative) {
+      SETERRQ(PetscObjectComm((PetscObject)pc),PETSC_ERR_USER,"We've removed multiplicative to do BC condensation (for now)");
+    }
 
     ierr = PetscOptionsInt("-pc_patch_construction_dim", "What dimension of entity to construct patches by? (0 = vertices)", "PCSetFromOptions_PATCH", patch->dim, &patch->dim, &dimflg);
     ierr = PetscOptionsInt("-pc_patch_construction_codim", "What co-dimension of entity to construct patches by? (0 = cells)", "PCSetFromOptions_PATCH", patch->codim, &patch->codim, &codimflg);
