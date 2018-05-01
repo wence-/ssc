@@ -1088,9 +1088,12 @@ static PetscErrorCode PCPatchCreateMatrix(PC pc, PetscInt which, Mat *mat)
             const PetscInt *idx = dofsArray + (offset + c)*patch->totalDofsPerCell;
             for (PetscInt i = 0; i < patch->totalDofsPerCell; i++) {
                 const PetscInt row = idx[i];
+                if (row < 0) continue;
                 for (PetscInt j = 0; j < patch->totalDofsPerCell; j++) {
                     const PetscInt col = idx[j];
                     const PetscInt key = row*rsize + col;
+                    if (col < 0) continue;
+
                     if (!PetscBTLookupSet(bt, key)) {
                         ++dnnz[row];
                     }
