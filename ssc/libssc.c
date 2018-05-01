@@ -1357,6 +1357,10 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     ierr = ISRestoreIndices(patch->globalBcNodes, &bcNodes); CHKERRQ(ierr);
     ierr = VecRestoreArrayRead(x, &globalX); CHKERRQ(ierr);
     ierr = VecRestoreArray(y, &globalY); CHKERRQ(ierr);
+    if (patch->partition_of_unity) {
+        /* Now apply partition of unity */
+        ierr = VecPointwiseMult(y, y, patch->dof_weights); CHKERRQ(ierr);
+    }
 
     ierr = PetscOptionsPopGetViewerOff(); CHKERRQ(ierr);
     ierr = PetscLogEventEnd(PC_Patch_Apply, pc, 0, 0, 0); CHKERRQ(ierr);
