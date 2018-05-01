@@ -754,7 +754,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc)
 
                         /* first, check if this is either a globally enforced or locally enforced BC dof */
                         PetscHashIMap(globalBcs, globalDof + l, isGlobalBcDof);
-                        PetscHashIMap(globalBcs, globalDof + l, isArtificialBcDof);
+                        PetscHashIMap(artificialbcs, globalDof + l, isArtificialBcDof);
 
                         /* if it's either, don't ever give it a local dof number */
                         if (isGlobalBcDof >= 0 || isArtificialBcDof >= 0) {
