@@ -620,6 +620,7 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc)
     const PetscInt *bcNodes    = NULL;
     PetscInt        numBcs;
     PetscHashI      ownedpts, seenpts, owneddofs, seendofs, artificialbcs;
+    PetscHashIIter  hi;
 
     PetscFunctionBegin;
 
@@ -670,7 +671,63 @@ static PetscErrorCode PCPatchCreateCellPatchDiscretisationInfo(PC pc)
         ierr = PCPatchGetPointDofs(patch, ownedpts, owneddofs, v, patch->exclude_subspace); CHKERRQ(ierr);
         ierr = PCPatchGetPointDofs(patch, seenpts, seendofs, v, -1); CHKERRQ(ierr);
         ierr = PCPatchComputeSetDifference(owneddofs, seendofs, artificialbcs); CHKERRQ(ierr);
+        if (patch->print_patches) {
+            PetscHashI globalbcdofs;
+            PetscHashICreate(globalbcdofs);
 
+            MPI_Comm comm = PetscObjectComm((PetscObject)pc);
+            ierr = PetscSynchronizedPrintf(comm, "Patch %d: owned dofs:\n", v); CHKERRQ(ierr);
+            PetscHashIIterBegin(owneddofs, hi);
+            while (!PetscHashIIterAtEnd(owneddofs, hi)) {
+                PetscInt globalDof;
+
+                PetscHashIIterGetKey(owneddofs, hi, globalDof);
+                PetscHashIIterNext(owneddofs, hi);
+                ierr = PetscSynchronizedPrintf(comm, "%d ", globalDof); CHKERRQ(ierr);
+            }
+            ierr = PetscSynchronizedPrintf(comm, "\n"); CHKERRQ(ierr);
+            ierr = PetscSynchronizedPrintf(comm, "Patch %d: seen dofs:\n", v); CHKERRQ(ierr);
+            PetscHashIIterBegin(seendofs, hi);
+            while (!PetscHashIIterAtEnd(seendofs, hi)) {
+                PetscInt globalDof;
+                PetscBool flg;
+
+                PetscHashIIterGetKey(seendofs, hi, globalDof);
+                PetscHashIIterNext(seendofs, hi);
+                ierr = PetscSynchronizedPrintf(comm, "%d ", globalDof); CHKERRQ(ierr);
+
+                PetscHashIHasKey(globalBcs, globalDof, flg);
+                if (flg) {
+                    PetscHashIAdd(globalbcdofs, globalDof, 0);
+                }
+            }
+            ierr = PetscSynchronizedPrintf(comm, "\n"); CHKERRQ(ierr);
+            ierr = PetscSynchronizedPrintf(comm, "Patch %d: global BCs:\n", v); CHKERRQ(ierr);
+            PetscHashISize(globalbcdofs, numBcs);
+            if (numBcs > 0) {
+                PetscHashIIterBegin(globalbcdofs, hi);
+                while (!PetscHashIIterAtEnd(globalbcdofs, hi)) {
+                    PetscInt globalDof;
+                    PetscHashIIterGetKey(globalbcdofs, hi, globalDof);
+                    PetscHashIIterNext(globalbcdofs, hi);
+                    ierr = PetscSynchronizedPrintf(comm, "%d ", globalDof); CHKERRQ(ierr);
+                }
+            }
+            ierr = PetscSynchronizedPrintf(comm, "\n"); CHKERRQ(ierr);
+            ierr = PetscSynchronizedPrintf(comm, "Patch %d: artificial BCs:\n", v); CHKERRQ(ierr);
+            PetscHashISize(artificialbcs, numBcs);
+            if (numBcs > 0) {
+                PetscHashIIterBegin(artificialbcs, hi);
+                while (!PetscHashIIterAtEnd(artificialbcs, hi)) {
+                    PetscInt globalDof;
+                    PetscHashIIterGetKey(artificialbcs, hi, globalDof);
+                    PetscHashIIterNext(artificialbcs, hi);
+                    ierr = PetscSynchronizedPrintf(comm, "%d ", globalDof); CHKERRQ(ierr);
+                }
+            }
+            ierr = PetscSynchronizedPrintf(comm, "\n\n"); CHKERRQ(ierr);
+            PetscHashIDestroy(globalbcdofs);
+        }
         for ( PetscInt k = 0; k < patch->nsubspaces; k++ ) {
             PetscInt nodesPerCell = patch->nodesPerCell[k];
             PetscInt subspaceOffset = patch->subspaceOffsets[k];
