@@ -1202,9 +1202,7 @@ static PetscErrorCode PCSetUp_PATCH(PC pc)
     PetscErrorCode  ierr;
     PC_PATCH       *patch = (PC_PATCH *)pc->data;
     const char     *prefix;
-    PetscScalar    *patchX  = NULL;
-    PetscInt       pStart, numBcs;
-    const PetscInt *bcNodes = NULL;
+    PetscInt       pStart;
 
     PetscFunctionBegin;
 
@@ -1307,7 +1305,6 @@ static PetscErrorCode PCApply_PATCH(PC pc, Vec x, Vec y)
     PetscScalar       *localX  = NULL;
     PetscScalar       *localY  = NULL;
     PetscScalar       *globalY = NULL;
-    PetscScalar       *patchX  = NULL;
     const PetscInt    *bcNodes = NULL;
     PetscInt           pStart, numBcs, size;
     PetscInt           nsweep = 1;
