@@ -21,7 +21,7 @@ def expected(mesh):
     elif mesh.geometric_dimension() == 2:
         return [10, 12, 12, 12]
     elif mesh.geometric_dimension() == 3:
-        return [4, 23, 29, 29]
+        return [4, 21, 22, 22]
 
 
 def test_p_independence(mesh, expected):
@@ -47,18 +47,15 @@ def test_p_independence(mesh, expected):
             "pc_type": "python",
             "pc_python_type": "ssc.SSC",
             "ssc_sub_0": {
-                "pc_patch_multiplicative": False,
                 "pc_patch_sub_mat_type": "aij",
                 "pc_patch_save_operators": True,
                 "sub_ksp_type": "preonly",
                 "sub_pc_type": "lu",
-                "sub_pc_factor_mat_solver_package": "mumps",
             },
             "ssc_sub_1": {
                 "lo_mat_type": "aij",
                 "lo_ksp_type": "preonly",
                 "lo_pc_type": "lu",
-                "lo_pc_factor_mat_solver_package": "mumps",
             },
             "ksp_monitor": True})
 
