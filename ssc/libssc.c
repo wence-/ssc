@@ -219,7 +219,7 @@ static PetscErrorCode PCPatchCreateDefaultSF_Private(PC pc, PetscInt n, const Pe
                 /* Offset on given rank for ith subspace */
                 rootOffset = remoteOffsets[n*idx + i];
                 for ( PetscInt k = 0; k < bs[i]; k++ ) {
-                    ilocal[index] = local[j]*bs[i] + k + leafOffset;
+                    ilocal[index] = (local ? local[j] : j)*bs[i] + k + leafOffset;
                     iremote[index].rank = remote[j].rank;
                     iremote[index].index = remote[j].index*bs[i] + k + rootOffset;
                     ++index;
