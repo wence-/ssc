@@ -11,7 +11,9 @@ cdef extern from "petsc.h" nogil:
     int PetscMalloc1(PetscInt, void*)
     int PetscFree(void*)
 
-cdef extern from "libssc.h" nogil:
+cdef extern from "petscpc.h" nogil:
+    ctypedef enum PCPatchConstructType:
+        PC_PATCH_STAR, PC_PATCH_VANKA, PC_PATCH_USER, PC_PATCH_PYTHON
     int PCPatchSetCellNumbering(PETSc.PetscPC, PETSc.PetscSection)
     int PCPatchSetDiscretisationInfo(PETSc.PetscPC, PetscInt, PETSc.PetscDM *,
                                      PetscInt *, PetscInt *,
@@ -21,11 +23,9 @@ cdef extern from "libssc.h" nogil:
                                      const PetscInt *,
                                      PetscInt,
                                      const PetscInt *)
-    int PCPatchSetComputeOperator(PETSc.PetscPC, int (*)(PETSc.PetscPC, PETSc.PetscMat, PetscInt, const PetscInt *, PetscInt, const PetscInt *, void *) except -1, void*)
-    int PCPatchSetUserPatchConstructionOperator(PETSc.PetscPC, int (*)(PETSc.PetscPC, PetscInt*, PETSc.PetscIS**, PETSc.PetscIS*, void *) except -1, void*)
-    int PCCreate_PATCH(PETSc.PetscPC)
+    int PCPatchSetComputeOperator(PETSc.PetscPC, int (*)(PETSc.PetscPC, PetscInt, PETSc.PetscMat, PetscInt, const PetscInt *, PetscInt, const PetscInt *, void *) except -1, void*)
+    int PCPatchSetConstructType(PETSc.PetscPC, PCPatchConstructType, int (*)(PETSc.PetscPC, PetscInt*, PETSc.PetscIS**, PETSc.PetscIS*, void *) except -1, void*)
     int PetscObjectReference(void *)
-    int PCPatchInitializePackage()
 
 cdef extern from *:
     void PyErr_SetObject(object, object)
@@ -53,6 +53,7 @@ cdef inline PetscInt asInt(object value) except? -1:
 
 cdef int PCPatch_ComputeOperator(
     PETSc.PetscPC pc,
+    PetscInt point,
     PETSc.PetscMat mat,
     PetscInt ncell,
     const PetscInt *cells,
@@ -162,11 +163,9 @@ cdef class PC(PETSc.PC):
         self.set_attr("__compute_operator__", context)
         CHKERR( PCPatchSetComputeOperator(self.pc, PCPatch_ComputeOperator, <void *>context) )
 
-    def setPatchUserConstructionOperator(self, operator, args=None, kargs=None):
+    def setPatchConstructType(self, typ, operator, args=None, kargs=None):
         if args  is None: args  = ()
         if kargs is None: kargs = {}
         context = (operator, args, kargs)
         self.set_attr("__patch_construction_operator__", context)
-        CHKERR( PCPatchSetUserPatchConstructionOperator(self.pc, PCPatch_UserPatchConstructionOperator, <void *>context) )
-
-PCPatchInitializePackage()
+        CHKERR( PCPatchSetConstructType(self.pc, PC_PATCH_PYTHON, PCPatch_UserPatchConstructionOperator, <void *>context) )

@@ -33,7 +33,7 @@ petsc_dirs = get_petsc_dir()
 include_dirs = [np.get_include(), petsc4py.get_include()]
 include_dirs += ["%s/include" % d for d in petsc_dirs]
 
-link_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "ssc"))
+lib_dirs = ["%s/lib" % d for d in petsc_dirs]
 
 setup(name='ssc',
       cmdclass={'build_ext': build_ext},
@@ -41,7 +41,7 @@ setup(name='ssc',
       ext_modules=[Extension('ssc.PatchPC',
                              sources=["ssc/PatchPC.pyx"],
                              include_dirs=include_dirs,
-                             extra_link_args=["-L" + link_dir] +
-                             ["-Wl,-rpath," + link_dir],
+                             extra_link_args=(["-L%s" % d for d in lib_dirs] +
+                                              ["-Wl,-rpath,%s" % d for d in lib_dirs]),
                              extra_compile_args=["-O3"],
-                             libraries=["ssc"])])
+                             libraries=["petsc"])])
