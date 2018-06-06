@@ -53,8 +53,10 @@ def test_jacobi_equivalence(mesh, problem_type):
     problem = LinearVariationalProblem(a, L, uh, bcs=bcs)
 
     jacobi = LinearVariationalSolver(problem,
-                                     solver_parameters={"ksp_type": "cg",
+                                     solver_parameters={"ksp_type": "richardson",
                                                         "pc_type": "jacobi",
+                                                        "ksp_max_it": 5,
+                                                        "ksp_convergence_test": "skip",
                                                         "ksp_monitor": True})
 
     jacobi.snes.ksp.setConvergenceHistory()
@@ -65,7 +67,9 @@ def test_jacobi_equivalence(mesh, problem_type):
 
     patch = LinearVariationalSolver(problem,
                                     solver_parameters={"mat_type": "matfree",
-                                                       "ksp_type": "cg",
+                                                       "ksp_type": "richardson",
+                                                       "ksp_max_it": 5,
+                                                       "ksp_convergence_test": "skip",
                                                        "pc_type": "python",
                                                        "pc_python_type": "ssc.PatchPC",
                                                        "patch_pc_patch_multiplicative": False,
