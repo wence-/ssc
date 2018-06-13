@@ -133,7 +133,7 @@ class OrderedRelaxation(object):
 
         sortorders = opts.getString("pc_patch_construction_%s_sort_order" % name, default=sentinel)
         if sortorders == sentinel:
-            raise ValueError("Must set %spc_patch_construction_%s_sort_order" % (prefix, name))
+            sortorders = "None"
 
         if sortorders == "None":
             piterset = PETSc.IS().createStride(size=len(patches), first=0, step=1, comm=PETSc.COMM_SELF)
