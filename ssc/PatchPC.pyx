@@ -23,7 +23,7 @@ cdef extern from "petscpc.h" nogil:
                                      const PetscInt *,
                                      PetscInt,
                                      const PetscInt *)
-    int PCPatchSetComputeOperator(PETSc.PetscPC, int (*)(PETSc.PetscPC, PetscInt, PETSc.PetscMat, PetscInt, const PetscInt *, PetscInt, const PetscInt *, void *) except -1, void*)
+    int PCPatchSetComputeOperator(PETSc.PetscPC, int (*)(PETSc.PetscPC, PetscInt, PETSc.PetscMat, PETSc.PetscIS, PetscInt, const PetscInt *, void *) except -1, void*)
     int PCPatchSetConstructType(PETSc.PetscPC, PCPatchConstructType, int (*)(PETSc.PetscPC, PetscInt*, PETSc.PetscIS**, PETSc.PetscIS*, void *) except -1, void*)
     int PetscObjectReference(void *)
 
@@ -55,22 +55,24 @@ cdef int PCPatch_ComputeOperator(
     PETSc.PetscPC pc,
     PetscInt point,
     PETSc.PetscMat mat,
-    PetscInt ncell,
-    const PetscInt *cells,
+    PETSc.PetscIS cellIS,
     PetscInt ndof,
     const PetscInt *dofmap,
     void *ctx) except -1 with gil:
     cdef PETSc.Mat Mat = PETSc.Mat()
     cdef PETSc.PC Pc = PETSc.PC()
+    cdef PETSc.IS Is = PETSc.IS()
     Pc.pc = pc
     Mat.mat = mat
+    Is.iset = cellIS
     CHKERR( PetscObjectReference(<void*>mat) )
     CHKERR( PetscObjectReference(<void*>pc) )
+    CHKERR( PetscObjectReference(<void*>cellIS) )
     cdef object context = Pc.get_attr("__compute_operator__")
     if context is None and ctx != NULL: context = <object>ctx
     assert context is not None and type(context) is tuple
     (op, args, kargs) = context
-    op(Pc, Mat, ncell, <uintptr_t>cells, <uintptr_t>dofmap, *args, **kargs)
+    op(Pc, Mat, Is, <uintptr_t>dofmap, *args, **kargs)
 
 cdef int PCPatch_UserPatchConstructionOperator(
     PETSc.PetscPC pc,

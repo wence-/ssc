@@ -207,7 +207,10 @@ def setup_patch_pc(patch, J, bcs):
             if c_map is not None:
                 op_args.append(c_map._values.ctypes.data)
 
-    def op(pc, mat, ncell, cells, cell_dofmap):
+    def op(pc, mat, cellIS, cell_dofmap):
+        cells_numpy = cellIS.indices
+        cells = cells_numpy.ctypes.data
+        ncell = len(cells_numpy)
         funptr(0, ncell, cells, mat.handle,
                cell_dofmap, cell_dofmap, *op_args)
         mat.assemble()
