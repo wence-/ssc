@@ -165,7 +165,7 @@ cdef class PC(PETSc.PC):
         self.set_attr("__compute_operator__", context)
         CHKERR( PCPatchSetComputeOperator(self.pc, PCPatch_ComputeOperator, <void *>context) )
 
-    def setPatchConstructType(self, typ, operator, args=None, kargs=None):
+    def setPatchConstructType(self, operator, args=None, kargs=None):
         if args  is None: args  = ()
         if kargs is None: kargs = {}
         context = (operator, args, kargs)

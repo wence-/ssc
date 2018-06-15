@@ -225,7 +225,7 @@ def setup_patch_pc(patch, J, bcs):
                                      ghost_bc_nodes,
                                      global_bc_nodes)
     patch.setPatchComputeOperator(op)
-    # patch.setPatchConstructType(None, user_construction_op)
+    patch.setPatchConstructType(user_construction_op)
     return patch
 
 
