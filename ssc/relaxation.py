@@ -60,9 +60,9 @@ class PlaneSmoother(object):
         dm = pc.getDM()
         prefix = pc.getOptionsPrefix()
         sentinel = object()
-        sweeps = PETSc.Options(prefix).getString("pc_patch_construction_ps_sweeps", default=sentinel)
+        sweeps = PETSc.Options(prefix).getString("pc_patch_construct_ps_sweeps", default=sentinel)
         if sweeps == sentinel:
-            raise ValueError("Must set %spc_patch_construction_ps_sweeps" % prefix)
+            raise ValueError("Must set %spc_patch_construct_ps_sweeps" % prefix)
 
         patches = []
         for sweep in sweeps.split(':'):
@@ -100,9 +100,9 @@ class OrderedRelaxation(object):
     @staticmethod
     def get_entities(opts, name, dm):
         sentinel = object()
-        codim = opts.getInt("pc_patch_construction_%s_codim" % name, default=sentinel)
+        codim = opts.getInt("pc_patch_construct_%s_codim" % name, default=sentinel)
         if codim == sentinel:
-            dim = opts.getInt("pc_patch_construction_%s_dim" % name, default=0)
+            dim = opts.getInt("pc_patch_construct_%s_dim" % name, default=0)
             entities = range(*dm.getDepthStratum(dim))
         else:
             entities = range(*dm.getHeightStratum(codim))
@@ -121,7 +121,7 @@ class OrderedRelaxation(object):
         select = partial(select_entity, dm=dm, exclude="pyop2_ghost")
         entities = list(filter(select, self.get_entities(opts, name, dm)))
 
-        nclosure = opts.getInt("pc_patch_construction_%s_nclosures" % name, default=1)
+        nclosure = opts.getInt("pc_patch_construct_%s_nclosures" % name, default=1)
         patches = []
         for entity in entities:
             subentities = self.callback(dm, entity, nclosure)
@@ -131,9 +131,9 @@ class OrderedRelaxation(object):
         # Now make the iteration set.
         iterset = []
 
-        sortorders = opts.getString("pc_patch_construction_%s_sort_order" % name, default=sentinel)
+        sortorders = opts.getString("pc_patch_construct_%s_sort_order" % name, default=sentinel)
         if sortorders == sentinel:
-            raise ValueError("Must set %spc_patch_construction_%s_sort_order" % (prefix, name))
+            raise ValueError("Must set %spc_patch_construct_%s_sort_order" % (prefix, name))
 
         if sortorders == "None":
             piterset = PETSc.IS().createStride(size=len(patches), first=0, step=1, comm=PETSc.COMM_SELF)
@@ -165,7 +165,7 @@ class OrderedVanka(OrderedRelaxation):
 
     def set_options(self, dm, opts, name):
         sentinel = object()
-        exclude_dim = opts.getInt("pc_patch_construction_%s_exclude_dim" % name, default=sentinel)
+        exclude_dim = opts.getInt("pc_patch_construct_%s_exclude_dim" % name, default=sentinel)
         if exclude_dim == sentinel:
             self.exclude_dim = None
         else:
