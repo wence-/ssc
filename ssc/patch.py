@@ -97,7 +97,7 @@ def matrix_funptr(form):
     # OK, now we've validated the kernel, let's build the callback
     args = []
 
-    toset = op2.Set(1)
+    toset = op2.Set(1, comm=test.comm)
     dofset = op2.DataSet(toset, 1)
     arity = sum(m.arity*s.cdim
                 for m, s in zip(test.cell_node_map(),
